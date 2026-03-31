@@ -26,13 +26,35 @@
 
       <section class="legend">
         <span><span class="dot available"></span>Available</span>
-        <span><span class="dot held"></span>Held</span>
+        <span><span class="dot pending"></span>Pending</span>
+        <span><span class="dot confirmed"></span>Confirmed</span>
         <span><span class="dot selected"></span>Your Seat</span>
       </section>
 
       <div id="seatGrid" class="seat-grid" aria-label="Seat grid"></div>
 
-      <p id="messageBox" class="message info">Click any seat to begin.</p>
+      <p id="messageBox" class="message info">Loading seats from Firestore...</p>
+
+      <section id="adminPanel" class="admin-panel hidden">
+        <h2>Admin Panel</h2>
+        <div class="admin-table-wrap">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th>Seat</th>
+                <th>User Name</th>
+                <th>Email</th>
+                <th>WhatsApp</th>
+                <th>Time Left</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="adminRows"></tbody>
+          </table>
+        </div>
+        <p id="adminEmpty" class="admin-empty">No held seats right now.</p>
+      </section>
     </section>
   </main>
 

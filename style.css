@@ -10,7 +10,8 @@
   --secondary-hover: #334155;
   --available: #16a34a;
   --available-hover: #15803d;
-  --held: #f59e0b;
+  --pending: #f59e0b;
+  --confirmed: #dc2626;
   --selected: #2563eb;
 }
 
@@ -131,8 +132,12 @@ button.secondary:hover:enabled {
   background: var(--available);
 }
 
-.dot.held {
-  background: var(--held);
+.dot.pending {
+  background: var(--pending);
+}
+
+.dot.confirmed {
+  background: var(--confirmed);
 }
 
 .dot.selected {
@@ -142,7 +147,7 @@ button.secondary:hover:enabled {
 .seat-grid {
   margin-top: 16px;
   display: grid;
-  grid-template-columns: repeat(10, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -176,8 +181,13 @@ button.secondary:hover:enabled {
   transform: translateY(-1px);
 }
 
-.seat.held {
-  background: var(--held);
+.seat.pending {
+  background: var(--pending);
+  cursor: not-allowed;
+}
+
+.seat.confirmed {
+  background: var(--confirmed);
   cursor: not-allowed;
 }
 
@@ -210,6 +220,77 @@ button.secondary:hover:enabled {
   color: #b91c1c;
   background: #fef2f2;
   border-color: #fecaca;
+}
+
+.admin-panel {
+  margin-top: 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 14px;
+}
+
+.admin-panel h2 {
+  margin: 0 0 10px;
+  font-size: 1.1rem;
+}
+
+.admin-table-wrap {
+  overflow-x: auto;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.admin-table th,
+.admin-table td {
+  border-bottom: 1px solid #e2e8f0;
+  padding: 8px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.admin-table thead th {
+  background: #eef2ff;
+  color: #1e293b;
+  font-weight: 700;
+}
+
+.admin-actions-cell {
+  display: flex;
+  gap: 6px;
+}
+
+.admin-action-btn {
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.admin-action-btn.approve {
+  background: #1d4ed8;
+}
+
+.admin-action-btn.approve:hover:enabled {
+  background: #1e40af;
+}
+
+.admin-action-btn.reject {
+  background: #dc2626;
+}
+
+.admin-action-btn.reject:hover:enabled {
+  background: #b91c1c;
+}
+
+.admin-empty {
+  margin: 10px 0 0;
+  color: #475569;
+  font-weight: 600;
 }
 
 .modal-backdrop {
@@ -279,11 +360,15 @@ button.secondary:hover:enabled {
 
 @media (max-width: 720px) {
   .seat-grid {
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .admin-table {
+    min-width: 720px;
   }
 }
