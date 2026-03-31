@@ -1,0 +1,41 @@
+<svg width="240" height="160" viewBox="0 0 240 160" xmlns="http://www.w3.org/2000/svg">
+  <g fill="#20292E" stroke="#FFFFFF" stroke-width="3" stroke-linejoin="round" stroke-linecap="round">
+    <!-- big left petal -->
+    <path d="M18 100
+             C34 78 58 72 88 76
+             C92 92 98 108 110 124
+             C78 126 46 120 18 100Z"/>
+
+    <!-- left inner petal -->
+    <path d="M64 58
+             C82 50 100 54 114 72
+             C112 94 110 110 116 124
+             C92 118 72 102 64 58Z"/>
+
+    <!-- center petal -->
+    <path d="M120 8
+             C102 28 96 58 102 92
+             C106 114 114 128 120 136
+             C126 128 134 114 138 92
+             C144 58 138 28 120 8Z"/>
+
+    <!-- right inner petal -->
+    <path d="M176 58
+             C158 50 140 54 126 72
+             C128 94 130 110 124 124
+             C148 118 168 102 176 58Z"/>
+
+    <!-- big right petal -->
+    <path d="M222 100
+             C206 78 182 72 152 76
+             C148 92 142 108 130 124
+             C162 126 194 120 222 100Z"/>
+
+    <!-- front base notch smoothing -->
+    <path d="M100 118
+             C108 124 114 128 120 130
+             C126 128 132 124 140 118
+             C132 122 126 124 120 124
+             C114 124 108 122 100 118Z"/>
+  </g>
+</svg>

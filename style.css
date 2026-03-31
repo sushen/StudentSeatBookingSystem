@@ -46,14 +46,40 @@ body {
 .header {
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
   flex-wrap: wrap;
 }
 
-h1 {
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-logo {
+  width: 64px;
+  height: auto;
+  display: block;
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.brand-title {
   margin: 0;
   font-size: 1.8rem;
+  line-height: 1.1;
+  font-weight: 800;
+}
+
+.brand-subtitle {
+  margin: 2px 0 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--secondary);
 }
 
 .auth-actions {
@@ -361,6 +387,18 @@ button.secondary:hover:enabled {
 @media (max-width: 720px) {
   .seat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .brand-logo {
+    width: 56px;
+  }
+
+  .brand-title {
+    font-size: 1.5rem;
+  }
+
+  .brand-subtitle {
+    font-size: 0.94rem;
   }
 
   .header {

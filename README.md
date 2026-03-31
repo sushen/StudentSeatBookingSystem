@@ -1,4 +1,4 @@
-# StudentSeat Booking System (Firestore 10-Seat Flow)
+# Shapla Chottor Ai Research Lab (Firestore 10-Seat Flow)
 
 This version keeps your existing Firebase Auth + WhatsApp profile flow and moves seat state to Firestore for **10 real seats**.
 
