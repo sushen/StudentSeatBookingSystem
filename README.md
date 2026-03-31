@@ -109,7 +109,14 @@ Then create matching documents `SID001` to `SID100` in Firestore.
 1. Open Firebase Console -> your project.
 2. Enable Authentication -> Google provider.
 3. Create Firestore database.
-4. Paste your Firebase web config in `app.js`.
+4. In `Authentication -> Settings -> Authorized domains`, add every domain where you host the app.
+5. Paste your Firebase web config in `app.js`.
+
+For GitHub Pages, add your GitHub host only (no protocol/path), for example:
+
+```txt
+sushen.github.io
+```
 
 ## Starter Firestore Rules (Example)
 

@@ -80,6 +80,24 @@ function isPermissionDeniedError(error) {
   return error?.code === "permission-denied" || message.includes("missing or insufficient permissions");
 }
 
+function getLoginErrorMessage(error) {
+  const code = String(error?.code || "");
+  if (code === "auth/unauthorized-domain") {
+    const host = window.location.hostname || "your domain";
+    return `Login blocked: ${host} is not authorized in Firebase Auth. Add "${host}" in Firebase Console -> Authentication -> Settings -> Authorized domains.`;
+  }
+  if (code === "auth/popup-closed-by-user") {
+    return "Login cancelled: the Google popup was closed before sign-in completed.";
+  }
+  if (code === "auth/popup-blocked") {
+    return "Login blocked by the browser. Allow popups for this site and try again.";
+  }
+  if (error?.message) {
+    return `Login failed: ${error.message}`;
+  }
+  return "Login failed. Please try again.";
+}
+
 function makeAppError(code, message) {
   const error = new Error(message);
   error.code = code;
@@ -350,7 +368,7 @@ async function handleLogin() {
     hideLoginModal();
     showMessage("Login successful.", "success");
   } catch (error) {
-    showMessage(`Login failed: ${error.message}`, "error");
+    showMessage(getLoginErrorMessage(error), "error");
   }
 }
 
