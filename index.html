@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Student Seat Booking System</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <main class="page">
+    <section class="card">
+      <header class="header">
+        <h1>Student Seat Booking System</h1>
+        <div class="auth-actions">
+          <button id="loginBtn" type="button">Login with Google</button>
+          <button id="logoutBtn" type="button" class="secondary">Logout</button>
+        </div>
+      </header>
+
+      <section id="profileCard" class="profile-card hidden">
+        <h2>Profile</h2>
+        <p><strong>Name:</strong> <span id="profileName">-</span></p>
+        <p><strong>Email:</strong> <span id="profileEmail">-</span></p>
+        <p><strong>WhatsApp:</strong> <span id="profilePhone">-</span></p>
+      </section>
+
+      <section class="legend">
+        <span><span class="dot available"></span>Available</span>
+        <span><span class="dot held"></span>Held</span>
+        <span><span class="dot selected"></span>Your Seat</span>
+      </section>
+
+      <div id="seatGrid" class="seat-grid" aria-label="Seat grid"></div>
+
+      <p id="messageBox" class="message info">Click any seat to begin.</p>
+    </section>
+  </main>
+
+  <!-- Login Modal -->
+  <div id="loginModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
+    <div class="modal-card">
+      <h2 id="loginTitle">Login Required</h2>
+      <p>Please login with Google to continue.</p>
+      <div class="modal-actions">
+        <button id="loginModalBtn" type="button">Login with Google</button>
+        <button id="loginModalCloseBtn" type="button" class="secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Phone Modal -->
+  <div id="phoneModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="phoneTitle">
+    <div class="modal-card">
+      <h2 id="phoneTitle">Enter your WhatsApp number</h2>
+      <form id="phoneForm" class="phone-form">
+        <label for="phoneInput">WhatsApp Number</label>
+        <input id="phoneInput" type="tel" placeholder="+880123456789" required />
+        <div class="modal-actions">
+          <button id="phoneSubmitBtn" type="submit">Save Profile</button>
+          <button id="phoneCancelBtn" type="button" class="secondary">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
