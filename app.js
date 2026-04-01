@@ -8,6 +8,7 @@ import {
   initializeSoundEngine,
   registerSoundEngineUserInteraction,
   setSoundEngineAdminMode,
+  speakNotification,
   speakNotificationOnce
 } from "./sound-engine/soundEngine.js";
 import { findNewPendingSeatEvents } from "./sound-engine/seatNotificationUtils.js";
@@ -73,6 +74,7 @@ const elements = {
   phoneForm: document.getElementById("phoneForm"),
   phoneInput: document.getElementById("phoneInput"),
   phoneCancelBtn: document.getElementById("phoneCancelBtn"),
+  speechTestBtn: document.getElementById("speechTestBtn"),
   adminPanel: document.getElementById("adminPanel"),
   adminRows: document.getElementById("adminRows"),
   adminEmpty: document.getElementById("adminEmpty")
@@ -1114,6 +1116,22 @@ function bindEvents() {
     registerSoundEngineUserInteraction();
     hidePhoneModal();
   });
+
+  if (elements.speechTestBtn) {
+    elements.speechTestBtn.onclick = () => {
+      registerSoundEngineUserInteraction();
+      const speakResult = speakNotification("Test sound working");
+      if (!speakResult.ok && speakResult.reason === "speech-not-supported") {
+        showMessage("SpeechSynthesis is not supported in this browser.", "error");
+        return;
+      }
+      if (!speakResult.ok) {
+        showMessage(`Voice test blocked: ${speakResult.reason}.`, "info");
+        return;
+      }
+      showMessage("Voice test triggered. You should hear: Test sound working.", "success");
+    };
+  }
 }
 
 async function setupFirebase() {

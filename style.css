@@ -248,6 +248,12 @@ button.secondary:hover:enabled {
   border-color: #fecaca;
 }
 
+.speech-test-wrap {
+  margin-top: 10px;
+  display: flex;
+  justify-content: flex-end;
+}
+
 .admin-panel {
   margin-top: 18px;
   border: 1px solid var(--border);
@@ -462,6 +468,10 @@ button.secondary:hover:enabled {
   }
 
   .inapp-actions button {
+    width: 100%;
+  }
+
+  .speech-test-wrap button {
     width: 100%;
   }
 }
