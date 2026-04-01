@@ -3,6 +3,14 @@ import {
   detectInAppBrowserEnvironment,
   getInAppBrowserInstructions
 } from "./inAppBrowserDetection.js";
+import {
+  clearSoundAnnouncementHistory,
+  initializeSoundEngine,
+  registerSoundEngineUserInteraction,
+  setSoundEngineAdminMode,
+  speakNotificationOnce
+} from "./sound-engine/soundEngine.js";
+import { findNewPendingSeatEvents } from "./sound-engine/seatNotificationUtils.js";
 
 // TODO: Replace with your Firebase web app config if needed.
 // Firebase Console -> Project Settings -> General -> Your apps -> SDK setup and configuration
@@ -81,7 +89,8 @@ const state = {
   isAdmin: false,
   hasLoadedSeats: false,
   expiringSeatIds: new Set(),
-  browserEnvironment: detectInAppBrowserEnvironment()
+  browserEnvironment: detectInAppBrowserEnvironment(),
+  hasShownSoundUnlockHint: false
 };
 
 function showMessage(text, type = "info") {
@@ -335,6 +344,26 @@ function formatTimeLeft(ms) {
 
 function formatAdminValue(value) {
   return value ? String(value) : "-";
+}
+
+function announceNewPendingSeatEvents(previousSeatsById, nextSeats) {
+  if (!state.isAdmin || !state.hasLoadedSeats) {
+    return;
+  }
+
+  const newPendingEvents = findNewPendingSeatEvents(previousSeatsById, nextSeats);
+  newPendingEvents.forEach((eventInfo) => {
+    const speakResult = speakNotificationOnce(eventInfo.eventId, eventInfo.text);
+
+    if (
+      !speakResult.ok &&
+      speakResult.reason === "interaction-required" &&
+      !state.hasShownSoundUnlockHint
+    ) {
+      state.hasShownSoundUnlockHint = true;
+      showMessage("Voice alerts are ready. Tap anywhere once to enable audio notifications.", "info");
+    }
+  });
 }
 
 function renderSeats() {
@@ -899,6 +928,7 @@ function subscribeToSeats() {
   state.seatsUnsubscribe = onSnapshotFn(
     seatsQuery,
     (snapshot) => {
+      const previousSeatsById = new Map(state.seats.map((seat) => [seat.seatId, seat]));
       const seatsById = new Map();
       snapshot.forEach((seatDoc) => {
         seatsById.set(
@@ -911,6 +941,7 @@ function subscribeToSeats() {
         seatsById.get(seatId) || normalizeSeatDoc(seatId, buildAvailableSeatPayload(seatId, index + 1), index + 1)
       );
 
+      announceNewPendingSeatEvents(previousSeatsById, state.seats);
       renderSeats();
       syncSeatTimer();
 
@@ -938,6 +969,11 @@ function subscribeToSeats() {
 async function onAuthStateChangedHandler(user) {
   state.user = user;
   state.isAdmin = Boolean(user && user.email && user.email.toLowerCase() === ADMIN_EMAIL);
+  setSoundEngineAdminMode(state.isAdmin);
+  if (!state.isAdmin) {
+    state.hasShownSoundUnlockHint = false;
+    clearSoundAnnouncementHistory();
+  }
   updateAuthButtons();
 
   if (!user) {
@@ -1042,23 +1078,42 @@ async function handlePhoneSubmit(event) {
 }
 
 function bindEvents() {
-  elements.loginBtn.addEventListener("click", openLoginFlow);
+  elements.loginBtn.addEventListener("click", () => {
+    registerSoundEngineUserInteraction();
+    openLoginFlow();
+  });
   elements.logoutBtn.addEventListener("click", () => {
+    registerSoundEngineUserInteraction();
     void handleLogout();
   });
   elements.loginModalBtn.addEventListener("click", () => {
+    registerSoundEngineUserInteraction();
     void handleLogin();
   });
-  elements.loginModalCloseBtn.addEventListener("click", hideLoginModal);
-  elements.openBrowserBtn.addEventListener("click", openCurrentPageInBrowser);
+  elements.loginModalCloseBtn.addEventListener("click", () => {
+    registerSoundEngineUserInteraction();
+    hideLoginModal();
+  });
+  elements.openBrowserBtn.addEventListener("click", () => {
+    registerSoundEngineUserInteraction();
+    openCurrentPageInBrowser();
+  });
   elements.copyLinkBtn.addEventListener("click", () => {
+    registerSoundEngineUserInteraction();
     void copyCurrentPageLink();
   });
-  elements.inAppCloseBtn.addEventListener("click", hideInAppModal);
+  elements.inAppCloseBtn.addEventListener("click", () => {
+    registerSoundEngineUserInteraction();
+    hideInAppModal();
+  });
   elements.phoneForm.addEventListener("submit", (event) => {
+    registerSoundEngineUserInteraction();
     void handlePhoneSubmit(event);
   });
-  elements.phoneCancelBtn.addEventListener("click", hidePhoneModal);
+  elements.phoneCancelBtn.addEventListener("click", () => {
+    registerSoundEngineUserInteraction();
+    hidePhoneModal();
+  });
 }
 
 async function setupFirebase() {
@@ -1110,6 +1165,12 @@ function cleanup() {
 }
 
 async function initializeApp() {
+  initializeSoundEngine({
+    onlyWhenTabActive: true,
+    adminOnly: true,
+    language: "en-US"
+  });
+
   state.seats = createFallbackSeats();
   renderSeats();
   bindEvents();
