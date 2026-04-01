@@ -1,3 +1,9 @@
+import {
+  buildAndroidOpenInBrowserUrl,
+  detectInAppBrowserEnvironment,
+  getInAppBrowserInstructions
+} from "./inAppBrowserDetection.js";
+
 // TODO: Replace with your Firebase web app config if needed.
 // Firebase Console -> Project Settings -> General -> Your apps -> SDK setup and configuration
 const firebaseConfig = {
@@ -48,6 +54,13 @@ const elements = {
   loginModal: document.getElementById("loginModal"),
   loginModalBtn: document.getElementById("loginModalBtn"),
   loginModalCloseBtn: document.getElementById("loginModalCloseBtn"),
+  inAppModal: document.getElementById("inAppModal"),
+  inAppDetected: document.getElementById("inAppDetected"),
+  inAppAndroidSteps: document.getElementById("inAppAndroidSteps"),
+  inAppIosSteps: document.getElementById("inAppIosSteps"),
+  openBrowserBtn: document.getElementById("openBrowserBtn"),
+  copyLinkBtn: document.getElementById("copyLinkBtn"),
+  inAppCloseBtn: document.getElementById("inAppCloseBtn"),
   phoneModal: document.getElementById("phoneModal"),
   phoneForm: document.getElementById("phoneForm"),
   phoneInput: document.getElementById("phoneInput"),
@@ -67,12 +80,140 @@ const state = {
   seatsUnsubscribe: null,
   isAdmin: false,
   hasLoadedSeats: false,
-  expiringSeatIds: new Set()
+  expiringSeatIds: new Set(),
+  browserEnvironment: detectInAppBrowserEnvironment()
 };
 
 function showMessage(text, type = "info") {
   elements.messageBox.textContent = text;
   elements.messageBox.className = `message ${type}`;
+}
+
+function isGoogleLoginBlockedInCurrentBrowser() {
+  return Boolean(state.browserEnvironment?.shouldBlockGoogleAuth);
+}
+
+function showInAppModal() {
+  elements.inAppModal.classList.remove("hidden");
+}
+
+function hideInAppModal() {
+  elements.inAppModal.classList.add("hidden");
+}
+
+function populateInstructionList(listElement, items) {
+  listElement.innerHTML = "";
+  items.forEach((item) => {
+    const listItem = document.createElement("li");
+    listItem.textContent = item;
+    listElement.appendChild(listItem);
+  });
+}
+
+function renderInAppBrowserGuidance() {
+  const browserContext = state.browserEnvironment || detectInAppBrowserEnvironment();
+  const instructions = getInAppBrowserInstructions();
+
+  populateInstructionList(elements.inAppAndroidSteps, instructions.android);
+  populateInstructionList(elements.inAppIosSteps, instructions.ios);
+
+  if (browserContext.classification === "blocked") {
+    elements.inAppDetected.textContent = `Detected: ${browserContext.detectedApp}. Google sign-in is disabled here.`;
+  } else if (browserContext.classification === "uncertain") {
+    elements.inAppDetected.textContent = "This may be an embedded browser. If login fails, open this page in Chrome or Safari.";
+  } else {
+    elements.inAppDetected.textContent = "Use a full browser like Chrome, Safari, Firefox, or Edge for sign-in.";
+  }
+
+  const isAndroid = browserContext.platform === "android";
+  elements.openBrowserBtn.classList.toggle("hidden", !isAndroid);
+}
+
+function fallbackCopyText(value) {
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "readonly");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  try {
+    textarea.select();
+    return document.execCommand("copy");
+  } catch (error) {
+    return false;
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
+async function copyCurrentPageLink() {
+  const url = window.location.href;
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(url);
+      showMessage("Link copied. Open it in Chrome or Safari.", "success");
+      return;
+    }
+
+    if (fallbackCopyText(url)) {
+      showMessage("Link copied. Open it in Chrome or Safari.", "success");
+      return;
+    }
+
+    showMessage("Unable to copy automatically. Please copy the URL manually.", "info");
+  } catch (error) {
+    if (fallbackCopyText(url)) {
+      showMessage("Link copied. Open it in Chrome or Safari.", "success");
+    } else {
+      showMessage("Unable to copy automatically. Please copy the URL manually.", "info");
+    }
+  }
+}
+
+function openCurrentPageInBrowser() {
+  const currentUrl = window.location.href;
+  const androidIntentUrl = buildAndroidOpenInBrowserUrl(currentUrl);
+
+  // Best-effort Android handoff. Some in-app browsers ignore this intent URL.
+  if (androidIntentUrl) {
+    window.location.href = androidIntentUrl;
+    window.setTimeout(() => {
+      showMessage("If this did not open Chrome, tap Copy Link and open it manually.", "info");
+    }, 700);
+    return;
+  }
+
+  const popupWindow = window.open(currentUrl, "_blank", "noopener,noreferrer");
+  if (!popupWindow) {
+    showMessage("Unable to open an external browser automatically. Tap Copy Link.", "info");
+  }
+}
+
+function openLoginFlow() {
+  if (isGoogleLoginBlockedInCurrentBrowser()) {
+    hideLoginModal();
+    showInAppModal();
+    showMessage("Google sign-in is not supported in this in-app browser. Open this page in Chrome or Safari.", "error");
+    return;
+  }
+
+  showLoginModal();
+}
+
+function applyBrowserEnvironmentGuard() {
+  // Google OAuth must not run in blocked embedded browsers.
+  state.browserEnvironment = detectInAppBrowserEnvironment();
+  renderInAppBrowserGuidance();
+
+  if (state.browserEnvironment.shouldBlockGoogleAuth) {
+    showInAppModal();
+    showMessage("Google sign-in is disabled in this embedded browser. Open this page in a full browser.", "error");
+    return;
+  }
+
+  if (state.browserEnvironment.isUncertain) {
+    showMessage("This might be an embedded browser. If login fails, open this page in Chrome or Safari.", "info");
+  }
 }
 
 function isPermissionDeniedError(error) {
@@ -82,6 +223,8 @@ function isPermissionDeniedError(error) {
 
 function getLoginErrorMessage(error) {
   const code = String(error?.code || "");
+  const message = String(error?.message || "");
+  const loweredMessage = message.toLowerCase();
   if (code === "auth/unauthorized-domain") {
     const host = window.location.hostname || "your domain";
     return `Login blocked: ${host} is not authorized in Firebase Auth. Add "${host}" in Firebase Console -> Authentication -> Settings -> Authorized domains.`;
@@ -92,8 +235,11 @@ function getLoginErrorMessage(error) {
   if (code === "auth/popup-blocked") {
     return "Login blocked by the browser. Allow popups for this site and try again.";
   }
-  if (error?.message) {
-    return `Login failed: ${error.message}`;
+  if (loweredMessage.includes("disallowed_useragent")) {
+    return "Google sign-in is blocked inside this in-app browser. Open this page in Chrome or Safari.";
+  }
+  if (message) {
+    return `Login failed: ${message}`;
   }
   return "Login failed. Please try again.";
 }
@@ -319,8 +465,15 @@ function renderAdminPanel() {
 }
 
 function updateAuthButtons() {
-  elements.loginBtn.disabled = !state.firebaseReady || Boolean(state.user);
+  const loginBlocked = isGoogleLoginBlockedInCurrentBrowser();
+  const blockTitle = "Google sign-in is disabled in embedded in-app browsers. Open this page in Chrome or Safari.";
+
+  elements.loginBtn.disabled = loginBlocked || !state.firebaseReady || Boolean(state.user);
+  elements.loginModalBtn.disabled = loginBlocked || !state.firebaseReady || Boolean(state.user);
   elements.logoutBtn.disabled = !state.firebaseReady || !state.user;
+
+  elements.loginBtn.title = loginBlocked ? blockTitle : "";
+  elements.loginModalBtn.title = loginBlocked ? blockTitle : "";
 }
 
 function updateProfileUI() {
@@ -358,6 +511,13 @@ function isValidPhone(value) {
 }
 
 async function handleLogin() {
+  if (isGoogleLoginBlockedInCurrentBrowser()) {
+    hideLoginModal();
+    showInAppModal();
+    showMessage("Google sign-in is blocked inside this in-app browser. Open this page in Chrome or Safari.", "error");
+    return;
+  }
+
   if (!state.firebaseReady || !auth || !provider || !signInWithPopupFn) {
     showMessage("Firebase is not ready. Check config and reload.", "error");
     return;
@@ -836,7 +996,7 @@ async function handleSeatClick(seatId) {
 
   if (!state.user) {
     showMessage("Please log in first.", "error");
-    showLoginModal();
+    openLoginFlow();
     return;
   }
 
@@ -878,7 +1038,7 @@ async function handlePhoneSubmit(event) {
 }
 
 function bindEvents() {
-  elements.loginBtn.addEventListener("click", showLoginModal);
+  elements.loginBtn.addEventListener("click", openLoginFlow);
   elements.logoutBtn.addEventListener("click", () => {
     void handleLogout();
   });
@@ -886,6 +1046,11 @@ function bindEvents() {
     void handleLogin();
   });
   elements.loginModalCloseBtn.addEventListener("click", hideLoginModal);
+  elements.openBrowserBtn.addEventListener("click", openCurrentPageInBrowser);
+  elements.copyLinkBtn.addEventListener("click", () => {
+    void copyCurrentPageLink();
+  });
+  elements.inAppCloseBtn.addEventListener("click", hideInAppModal);
   elements.phoneForm.addEventListener("submit", (event) => {
     void handlePhoneSubmit(event);
   });
@@ -945,6 +1110,8 @@ async function initializeApp() {
   renderSeats();
   bindEvents();
   showMessage("Loading seats from Firestore...", "info");
+  applyBrowserEnvironmentGuard();
+  updateAuthButtons();
 
   const firebaseOk = await setupFirebase();
   updateAuthButtons();

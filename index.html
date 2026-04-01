@@ -76,6 +76,34 @@
     </div>
   </div>
 
+  <!-- In-App Browser Block Modal -->
+  <div id="inAppModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="inAppTitle">
+    <div class="modal-card inapp-modal-card">
+      <h2 id="inAppTitle">Open this page in your browser</h2>
+      <p>Google sign-in is not supported inside Messenger, Facebook, Instagram, or similar in-app browsers.</p>
+      <p id="inAppDetected" class="inapp-detected"></p>
+
+      <div class="inapp-steps">
+        <section>
+          <h3>Android</h3>
+          <ol id="inAppAndroidSteps" class="inapp-step-list"></ol>
+        </section>
+        <section>
+          <h3>iPhone</h3>
+          <ol id="inAppIosSteps" class="inapp-step-list"></ol>
+        </section>
+      </div>
+
+      <p class="inapp-note">If automatic opening does not work, copy the link and open it manually in Chrome or Safari.</p>
+
+      <div class="modal-actions inapp-actions">
+        <button id="openBrowserBtn" type="button">Open in Browser (Android)</button>
+        <button id="copyLinkBtn" type="button" class="secondary">Copy Link</button>
+        <button id="inAppCloseBtn" type="button" class="secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Phone Modal -->
   <div id="phoneModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="phoneTitle">
     <div class="modal-card">
