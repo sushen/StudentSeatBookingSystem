@@ -467,10 +467,14 @@ function renderAdminPanel() {
 function updateAuthButtons() {
   const loginBlocked = isGoogleLoginBlockedInCurrentBrowser();
   const blockTitle = "Google sign-in is disabled in embedded in-app browsers. Open this page in Chrome or Safari.";
+  const isSignedIn = Boolean(state.user);
 
-  elements.loginBtn.disabled = loginBlocked || !state.firebaseReady || Boolean(state.user);
-  elements.loginModalBtn.disabled = loginBlocked || !state.firebaseReady || Boolean(state.user);
-  elements.logoutBtn.disabled = !state.firebaseReady || !state.user;
+  elements.loginBtn.classList.toggle("hidden", isSignedIn);
+  elements.logoutBtn.classList.toggle("hidden", !isSignedIn);
+
+  elements.loginBtn.disabled = loginBlocked || !state.firebaseReady || isSignedIn;
+  elements.loginModalBtn.disabled = loginBlocked || !state.firebaseReady || isSignedIn;
+  elements.logoutBtn.disabled = !state.firebaseReady || !isSignedIn;
 
   elements.loginBtn.title = loginBlocked ? blockTitle : "";
   elements.loginModalBtn.title = loginBlocked ? blockTitle : "";
