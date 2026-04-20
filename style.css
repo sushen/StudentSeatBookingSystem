@@ -8,11 +8,9 @@
   --primary-hover: #1d4ed8;
   --secondary: #475569;
   --secondary-hover: #334155;
-  --available: #16a34a;
-  --available-hover: #15803d;
+  --locked: #64748b;
   --pending: #f59e0b;
-  --confirmed: #dc2626;
-  --selected: #2563eb;
+  --unlocked: #16a34a;
 }
 
 * {
@@ -127,6 +125,13 @@ button.secondary:hover:enabled {
   padding: 12px;
 }
 
+.profile-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .profile-card h2 {
   margin: 0 0 8px;
   font-size: 1.05rem;
@@ -134,6 +139,15 @@ button.secondary:hover:enabled {
 
 .profile-card p {
   margin: 5px 0;
+}
+
+.admin-chip {
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  background: #1d4ed8;
+  color: #ffffff;
 }
 
 .legend {
@@ -146,6 +160,31 @@ button.secondary:hover:enabled {
   font-size: 0.92rem;
 }
 
+.phase-track-tabs {
+  margin-top: 14px;
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.track-tab {
+  background: #e2e8f0;
+  color: #334155;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-size: 0.88rem;
+}
+
+.track-tab:hover:enabled {
+  background: #cbd5e1;
+}
+
+.track-tab.active {
+  background: var(--primary);
+  color: #ffffff;
+}
+
 .dot {
   width: 10px;
   height: 10px;
@@ -154,72 +193,110 @@ button.secondary:hover:enabled {
   margin-right: 6px;
 }
 
-.dot.available {
-  background: var(--available);
+.dot.locked {
+  background: var(--locked);
 }
 
 .dot.pending {
   background: var(--pending);
 }
 
-.dot.confirmed {
-  background: var(--confirmed);
+.dot.unlocked {
+  background: var(--unlocked);
 }
 
-.dot.selected {
-  background: var(--selected);
-}
-
-.seat-grid {
+.phase-list {
   margin-top: 16px;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.phase-card {
+  min-height: 170px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: #f8fafc;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.phase-card.phase-card-full {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+
+.phase-card-header {
+  display: flex;
+  justify-content: space-between;
   gap: 8px;
 }
 
-.seat {
-  min-height: 48px;
-  border-radius: 10px;
-  border: none;
-  color: #ffffff;
-  font-size: 0.8rem;
-  font-weight: 700;
-  background: var(--available);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
+.phase-title {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.25;
 }
 
-.seat-num {
+.phase-subtitle {
+  margin: 3px 0 0;
+  color: #475569;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.phase-state {
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  height: fit-content;
+}
+
+.phase-state.locked {
+  background: #e2e8f0;
+  color: #334155;
+}
+
+.phase-state.pending {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.phase-state.unlocked {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.phase-meta {
+  margin: 0;
+  color: #334155;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.phase-description {
+  margin: 0;
+  color: #475569;
+  font-size: 0.9rem;
+}
+
+.phase-status-text {
+  margin: 0;
+  color: #334155;
   font-size: 0.86rem;
-  font-weight: 700;
 }
 
-.seat-time {
-  font-size: 0.67rem;
-  line-height: 1;
+.phase-action-btn {
+  width: 100%;
 }
 
-.seat:hover:enabled {
-  background: var(--available-hover);
-  transform: translateY(-1px);
-}
-
-.seat.pending {
-  background: var(--pending);
-  cursor: not-allowed;
-}
-
-.seat.confirmed {
-  background: var(--confirmed);
-  cursor: not-allowed;
-}
-
-.seat.selected {
-  background: var(--selected);
-  cursor: not-allowed;
+.phase-empty {
+  margin: 0;
+  color: #475569;
+  font-weight: 600;
 }
 
 .message {
@@ -265,6 +342,30 @@ button.secondary:hover:enabled {
 .admin-panel h2 {
   margin: 0 0 10px;
   font-size: 1.1rem;
+}
+
+.admin-tabs {
+  margin-bottom: 10px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.admin-tab {
+  background: #e2e8f0;
+  color: #334155;
+  padding: 7px 12px;
+  border-radius: 999px;
+  font-size: 0.84rem;
+}
+
+.admin-tab:hover:enabled {
+  background: #cbd5e1;
+}
+
+.admin-tab.active {
+  background: #1d4ed8;
+  color: #ffffff;
 }
 
 .admin-table-wrap {
@@ -317,6 +418,41 @@ button.secondary:hover:enabled {
 
 .admin-action-btn.reject:hover:enabled {
   background: #b91c1c;
+}
+
+.admin-action-btn.cancel {
+  background: #475569;
+}
+
+.admin-action-btn.cancel:hover:enabled {
+  background: #334155;
+}
+
+.admin-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.admin-status.pending {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.admin-status.approved {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.admin-status.rejected,
+.admin-status.cancelled,
+.admin-status.expired {
+  color: #991b1b;
+  background: #fee2e2;
 }
 
 .admin-empty {
@@ -438,8 +574,8 @@ button.secondary:hover:enabled {
 }
 
 @media (max-width: 720px) {
-  .seat-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+  .phase-list {
+    grid-template-columns: 1fr;
   }
 
   .brand-logo {
@@ -460,7 +596,7 @@ button.secondary:hover:enabled {
   }
 
   .admin-table {
-    min-width: 720px;
+    min-width: 980px;
   }
 
   .inapp-steps {

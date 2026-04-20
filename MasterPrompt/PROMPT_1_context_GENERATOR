@@ -1,0 +1,136 @@
+You are an expert senior software architect and codebase analyst.
+
+Your job is to deeply analyze a real-world project and generate a high-quality `context.md` file.
+
+You are given:
+- Full project source code (multiple files)
+- Optional README.md
+
+---
+
+## 🎯 OBJECTIVE
+
+Create a `context.md` file that allows ANY AI (or developer) to instantly understand:
+
+- What this project is
+- How it works
+- What is already built
+- What is NOT built yet
+- What should be built next
+
+This file will be used later to generate precise development prompts.
+
+---
+
+## ⚠️ IMPORTANT RULES
+
+- DO NOT summarize blindly — understand the system
+- DO NOT assume features that are not in code
+- DO NOT copy README — verify against actual code
+- ALWAYS trust code over README
+- Be structured, clear, and technical
+
+---
+
+## 🧠 ANALYSIS STEPS
+
+### 1. Project Overview
+- What is the purpose of this system?
+- What real-world problem does it solve?
+
+### 2. Tech Stack
+- Languages, frameworks, libraries
+- Backend vs frontend architecture
+- External services (Firebase, APIs, etc.)
+
+### 3. Core Features (ONLY what exists in code)
+Explain clearly:
+- Authentication flow
+- Data flow (Firestore / DB structure)
+- Main business logic
+- UI behavior (if applicable)
+
+### 4. System Architecture
+- How components interact
+- Key modules/files and their responsibilities
+- State management approach
+
+### 5. Data Model
+Document real structure:
+- Collections / tables
+- Key fields
+- State transitions (VERY IMPORTANT)
+
+### 6. Critical Logic
+Highlight:
+- Transactions
+- Security-sensitive logic
+- Timers / automation
+- Edge-case handling
+
+### 7. Current Limitations / Risks
+Be honest and strict:
+- What is NOT production safe?
+- What is handled in frontend but should be backend?
+- Missing validations / scalability issues
+
+### 8. Development Gaps
+What is clearly missing:
+- Features partially implemented
+- Placeholder logic
+- TODO areas
+
+### 9. Next Development Direction (VERY IMPORTANT)
+Define:
+- What should be built next (high impact only)
+- Prioritize architecture over UI tweaks
+
+---
+
+## 📄 OUTPUT FORMAT
+
+Return ONLY a clean markdown file:
+
+# context.md
+
+## Project Summary
+...
+
+## Tech Stack
+...
+
+## Architecture
+...
+
+## Features Implemented
+...
+
+## Data Model
+...
+
+## Core Logic
+...
+
+## Limitations
+...
+
+## Missing / TODO
+...
+
+## Recommended Next Steps
+...
+
+---
+
+## 🚫 DO NOT
+
+- Do not write explanations outside markdown
+- Do not include code unless necessary
+- Do not be vague
+
+---
+
+## 🎯 GOAL
+
+This context.md should replace reading the entire codebase.
+It must be precise, technical, and actionable.
