@@ -57,37 +57,51 @@
       </header>
 
       <section id="profileCard" class="profile-card hidden">
-        <h2>Profile</h2>
+        <div class="profile-card-header">
+          <h2>Profile</h2>
+          <button id="adminChip" type="button" class="admin-chip hidden">Admin</button>
+        </div>
         <p><strong>Name:</strong> <span id="profileName">-</span></p>
         <p><strong>Email:</strong> <span id="profileEmail">-</span></p>
-        <p><strong>WhatsApp:</strong> <span id="profilePhone">-</span></p>
+        <p><strong>Phone:</strong> <span id="profilePhoneNumber">-</span></p>
+        <p><strong>WhatsApp:</strong> <span id="profileWhatsapp">-</span></p>
       </section>
 
       <section class="legend">
-        <span><span class="dot available"></span>Available</span>
+        <span><span class="dot locked"></span>Locked</span>
         <span><span class="dot pending"></span>Pending</span>
-        <span><span class="dot confirmed"></span>Confirmed</span>
-        <span><span class="dot selected"></span>Your Seat</span>
+        <span><span class="dot unlocked"></span>Unlocked</span>
       </section>
 
-      <div id="seatGrid" class="seat-grid" aria-label="Seat grid"></div>
+      <section class="phase-track-tabs" aria-label="Phase tracks">
+        <button type="button" class="track-tab active" data-phase-filter="beginner">Beginner</button>
+        <button type="button" class="track-tab" data-phase-filter="intermediate">Intermediate</button>
+        <button type="button" class="track-tab" data-phase-filter="advanced">Advanced</button>
+      </section>
 
-      <p id="messageBox" class="message info">Loading seats from Firestore...</p>
+      <div id="phaseList" class="phase-list" aria-label="Phase list"></div>
+
+      <p id="messageBox" class="message info">Loading phases from Firestore...</p>
       <div class="speech-test-wrap">
         <button id="speechTestBtn" type="button" class="secondary">Test Voice Alert</button>
       </div>
 
       <section id="adminPanel" class="admin-panel hidden">
         <h2>Admin Panel</h2>
+        <div class="admin-tabs" role="tablist" aria-label="Admin booking tabs">
+          <button type="button" class="admin-tab active" data-admin-tab="pending">Pending</button>
+          <button type="button" class="admin-tab" data-admin-tab="all">All Bookings</button>
+        </div>
         <div class="admin-table-wrap">
           <table class="admin-table">
             <thead>
               <tr>
-                <th>Seat</th>
-                <th>User Name</th>
-                <th>Email</th>
+                <th>User ID</th>
+                <th>Phase ID</th>
+                <th>Phone</th>
                 <th>WhatsApp</th>
-                <th>Time Left</th>
+                <th>Created</th>
+                <th>Expires</th>
                 <th>Status</th>
                 <th>Actions</th>
               </tr>
@@ -95,8 +109,12 @@
             <tbody id="adminRows"></tbody>
           </table>
         </div>
-        <p id="adminEmpty" class="admin-empty">No held seats right now.</p>
+        <p id="adminEmpty" class="admin-empty">No pending bookings right now.</p>
       </section>
+
+      <footer class="legal-footer">
+        <a class="legal-link" href="./PRIVACY_POLICY.md" target="_blank" rel="noopener">Privacy Policy</a>
+      </footer>
     </section>
   </main>
 
@@ -143,10 +161,12 @@
   <!-- Phone Modal -->
   <div id="phoneModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="phoneTitle">
     <div class="modal-card">
-      <h2 id="phoneTitle">Enter your WhatsApp number</h2>
+      <h2 id="phoneTitle">Enter your contact details</h2>
       <form id="phoneForm" class="phone-form">
-        <label for="phoneInput">WhatsApp Number</label>
-        <input id="phoneInput" type="tel" placeholder="+880123456789" required />
+        <label for="phoneNumberInput">Phone Number</label>
+        <input id="phoneNumberInput" type="tel" placeholder="+880123456789" required />
+        <label for="whatsappInput">WhatsApp Number</label>
+        <input id="whatsappInput" type="tel" placeholder="+880123456789" required />
         <div class="modal-actions">
           <button id="phoneSubmitBtn" type="submit">Save Profile</button>
           <button id="phoneCancelBtn" type="button" class="secondary">Cancel</button>

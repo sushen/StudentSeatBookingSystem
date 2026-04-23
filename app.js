@@ -11,26 +11,113 @@ import {
   speakNotification,
   speakNotificationOnce
 } from "./sound-engine/soundEngine.js";
-import { findNewPendingSeatEvents } from "./sound-engine/seatNotificationUtils.js";
+import { findNewPendingBookingEvents } from "./sound-engine/bookingNotificationUtils.js";
 
 // TODO: Replace with your Firebase web app config if needed.
 // Firebase Console -> Project Settings -> General -> Your apps -> SDK setup and configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyBOIx-J4Pr4lzfpZrawlFy7PzFZ-t2S_jQ",
-  authDomain: "tradingaimobileapps.firebaseapp.com",
-  projectId: "tradingaimobileapps",
-  storageBucket: "tradingaimobileapps.firebasestorage.app",
-  messagingSenderId: "627431937414",
-  appId: "1:627431937414:web:94e7a984e29575fefe8807",
-  measurementId: "G-RFWGJMGSL2"
+  apiKey: "AIzaSyAjeXX12GP2CJJk-vuwG_otllf_rbDbbWs",
+  authDomain: "shaplachottor-5295e.firebaseapp.com",
+  projectId: "shaplachottor-5295e",
+  storageBucket: "shaplachottor-5295e.firebasestorage.app",
+  messagingSenderId: "68593164378"
+  // appId: "1:68593164378:web:YOUR_WEB_APP_ID"
 };
 
-const HOLD_DURATION_MS = 15 * 60 * 1000;
 const ADMIN_EMAIL = "sushen.biswas.aga@gmail.com";
-const SEAT_DOC_IDS = Array.from({ length: 10 }, (_, index) =>
-  `seat_${String(index + 1).padStart(3, "0")}`
+const ADMIN_EMAIL_ALIASES = new Set([
+  "sushen.biswas.aga@gmail.com",
+  "sushen.biswas.aga@googlemail.com"
+]);
+const BOOKING_EXPIRY_MS = 15 * 60 * 1000;
+
+const BOOKING_STATUS_PENDING = "pending";
+const BOOKING_STATUS_APPROVED = "approved";
+const BOOKING_STATUS_REJECTED = "rejected";
+const BOOKING_STATUS_CANCELLED = "cancelled";
+const BOOKING_STATUS_EXPIRED = "expired";
+
+const PHASE_STATE_LOCKED = "LOCKED";
+const PHASE_STATE_PENDING = "PENDING";
+const PHASE_STATE_UNLOCKED = "UNLOCKED";
+
+const PHASE_TRACK_BEGINNER = "beginner";
+const PHASE_TRACK_INTERMEDIATE = "intermediate";
+const PHASE_TRACK_ADVANCED = "advanced";
+
+const DEFAULT_TOTAL_SEATS = 100;
+
+const CANONICAL_PHASES = [
+  {
+    phaseId: "phase1",
+    title: "Foundations",
+    description: "Learn core programming fundamentals required for all future phases.",
+    level: "Beginner",
+    order: 1,
+    totalSeats: DEFAULT_TOTAL_SEATS,
+    bookedSeats: 0
+  },
+  {
+    phaseId: "phase2",
+    title: "Data Analysis",
+    description: "Master practical data analysis techniques for AI and trading workflows.",
+    level: "Beginner",
+    order: 2,
+    totalSeats: DEFAULT_TOTAL_SEATS,
+    bookedSeats: 0
+  },
+  {
+    phaseId: "phase3",
+    title: "Object-Oriented Programming",
+    description: "Build reusable systems and strong architecture using OOP principles.",
+    level: "Intermediate",
+    order: 3,
+    totalSeats: DEFAULT_TOTAL_SEATS,
+    bookedSeats: 0
+  },
+  {
+    phaseId: "phase4",
+    title: "System Design",
+    description: "Design scalable services and robust backend flows for production systems.",
+    level: "Intermediate",
+    order: 4,
+    totalSeats: DEFAULT_TOTAL_SEATS,
+    bookedSeats: 0
+  },
+  {
+    phaseId: "phase5",
+    title: "Simulation & Data Systems",
+    description: "Build simulation pipelines and data systems for model-backed decisions.",
+    level: "Advanced",
+    order: 5,
+    totalSeats: DEFAULT_TOTAL_SEATS,
+    bookedSeats: 0
+  },
+  {
+    phaseId: "phase6",
+    title: "Production Engineering",
+    description: "Ship production-grade AI workflows with reliability and monitoring.",
+    level: "Advanced",
+    order: 6,
+    totalSeats: DEFAULT_TOTAL_SEATS,
+    bookedSeats: 0
+  }
+];
+
+const CANONICAL_PHASE_BY_ID = new Map(CANONICAL_PHASES.map((phase) => [phase.phaseId, phase]));
+
+const LEGACY_PHASE_ID_MAP = new Map([
+  ["phase_1", "phase1"],
+  ["phase_2", "phase2"],
+  ["phase_3", "phase3"],
+  ["phase_4", "phase4"],
+  ["phase_5", "phase5"],
+  ["phase_6", "phase6"]
+]);
+
+const CANONICAL_TO_LEGACY_PHASE_ID_MAP = new Map(
+  Array.from(LEGACY_PHASE_ID_MAP.entries()).map(([legacyPhaseId, canonicalPhaseId]) => [canonicalPhaseId, legacyPhaseId])
 );
-const ALLOWED_SEAT_STATUS = new Set(["available", "pending", "confirmed"]);
 
 let auth = null;
 let db = null;
@@ -43,23 +130,27 @@ let signOutFn = null;
 let collectionFn = null;
 let queryFn = null;
 let whereFn = null;
-let documentIdFn = null;
 let onSnapshotFn = null;
 let runTransactionFn = null;
 let docFn = null;
-let getDocFn = null;
 let setDocFn = null;
 let serverTimestampFn = null;
+let arrayUnionFn = null;
+let arrayRemoveFn = null;
+let timestampClass = null;
 
 const elements = {
-  seatGrid: document.getElementById("seatGrid"),
+  phaseFilterButtons: Array.from(document.querySelectorAll("[data-phase-filter]")),
+  phaseList: document.getElementById("phaseList"),
   messageBox: document.getElementById("messageBox"),
   loginBtn: document.getElementById("loginBtn"),
   logoutBtn: document.getElementById("logoutBtn"),
   profileCard: document.getElementById("profileCard"),
   profileName: document.getElementById("profileName"),
   profileEmail: document.getElementById("profileEmail"),
-  profilePhone: document.getElementById("profilePhone"),
+  profilePhoneNumber: document.getElementById("profilePhoneNumber"),
+  profileWhatsapp: document.getElementById("profileWhatsapp"),
+  adminChip: document.getElementById("adminChip"),
   loginModal: document.getElementById("loginModal"),
   loginModalBtn: document.getElementById("loginModalBtn"),
   loginModalCloseBtn: document.getElementById("loginModalCloseBtn"),
@@ -71,11 +162,15 @@ const elements = {
   copyLinkBtn: document.getElementById("copyLinkBtn"),
   inAppCloseBtn: document.getElementById("inAppCloseBtn"),
   phoneModal: document.getElementById("phoneModal"),
+  phoneTitle: document.getElementById("phoneTitle"),
   phoneForm: document.getElementById("phoneForm"),
-  phoneInput: document.getElementById("phoneInput"),
+  phoneNumberInput: document.getElementById("phoneNumberInput"),
+  whatsappInput: document.getElementById("whatsappInput"),
+  phoneSubmitBtn: document.getElementById("phoneSubmitBtn"),
   phoneCancelBtn: document.getElementById("phoneCancelBtn"),
   speechTestBtn: document.getElementById("speechTestBtn"),
   adminPanel: document.getElementById("adminPanel"),
+  adminTabButtons: Array.from(document.querySelectorAll("[data-admin-tab]")),
   adminRows: document.getElementById("adminRows"),
   adminEmpty: document.getElementById("adminEmpty")
 };
@@ -83,16 +178,25 @@ const elements = {
 const state = {
   user: null,
   profile: null,
-  pendingSeatId: null,
-  seats: [],
+  userDocExists: false,
+  pendingPhaseId: null,
+  phases: buildFallbackPhaseList(),
+  userBookingsByPhaseId: new Map(),
+  selectedPhaseTrack: PHASE_TRACK_BEGINNER,
+  adminPendingBookings: [],
+  adminAllBookings: [],
+  selectedAdminTab: "pending",
   firebaseReady: false,
-  timerIntervalId: null,
-  seatsUnsubscribe: null,
+  phasesUnsubscribe: null,
+  userBookingsUnsubscribe: null,
+  userDocUnsubscribe: null,
+  adminBookingsUnsubscribe: null,
   isAdmin: false,
-  hasLoadedSeats: false,
-  expiringSeatIds: new Set(),
-  browserEnvironment: detectInAppBrowserEnvironment(),
-  hasShownSoundUnlockHint: false
+  hasLoadedPhases: false,
+  hasLoadedAdminBookings: false,
+  hasShownSoundUnlockHint: false,
+  hasPromptedForContact: false,
+  browserEnvironment: detectInAppBrowserEnvironment()
 };
 
 function showMessage(text, type = "info") {
@@ -236,6 +340,7 @@ function getLoginErrorMessage(error) {
   const code = String(error?.code || "");
   const message = String(error?.message || "");
   const loweredMessage = message.toLowerCase();
+
   if (code === "auth/unauthorized-domain") {
     const host = window.location.hostname || "your domain";
     return `Login blocked: ${host} is not authorized in Firebase Auth. Add "${host}" in Firebase Console -> Authentication -> Settings -> Authorized domains.`;
@@ -261,11 +366,6 @@ function makeAppError(code, message) {
   return error;
 }
 
-function parseSeatNumberFromId(seatId) {
-  const parsed = Number.parseInt(String(seatId).replace(/[^\d]/g, ""), 10);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
 function timestampToMillis(value) {
   if (!value) {
     return null;
@@ -285,156 +385,465 @@ function timestampToMillis(value) {
   return null;
 }
 
-function normalizeSeatStatus(value) {
-  if (typeof value !== "string") {
-    return "available";
+function normalizeString(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeEmail(value) {
+  return normalizeString(value).toLowerCase();
+}
+
+function isAdminEmail(value) {
+  const normalizedEmail = normalizeEmail(value);
+  if (!normalizedEmail) {
+    return false;
   }
-  return ALLOWED_SEAT_STATUS.has(value) ? value : "available";
+
+  if (ADMIN_EMAIL_ALIASES.has(normalizedEmail)) {
+    return true;
+  }
+
+  return normalizedEmail === normalizeEmail(ADMIN_EMAIL);
 }
 
-function buildAvailableSeatPayload(seatId, seatNumber) {
+function normalizeStringArray(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const uniqueValues = new Set(
+    value
+      .map((item) => normalizeString(item))
+      .filter((item) => Boolean(item))
+  );
+  return Array.from(uniqueValues);
+}
+
+function canonicalizePhaseId(rawPhaseId) {
+  const normalized = normalizeString(rawPhaseId).toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+
+  const legacyMappedPhaseId = LEGACY_PHASE_ID_MAP.get(normalized);
+  if (legacyMappedPhaseId) {
+    return legacyMappedPhaseId;
+  }
+
+  if (CANONICAL_PHASE_BY_ID.has(normalized)) {
+    return normalized;
+  }
+
+  return normalized;
+}
+
+function getLegacyPhaseIdForCanonical(canonicalPhaseId) {
+  return CANONICAL_TO_LEGACY_PHASE_ID_MAP.get(canonicalizePhaseId(canonicalPhaseId)) || null;
+}
+
+function toTrackName(rawLevel) {
+  const lowered = normalizeString(rawLevel).toLowerCase();
+  if (lowered === PHASE_TRACK_BEGINNER || lowered === PHASE_TRACK_INTERMEDIATE || lowered === PHASE_TRACK_ADVANCED) {
+    return lowered;
+  }
+  return PHASE_TRACK_BEGINNER;
+}
+
+function getCanonicalPhaseById(phaseId) {
+  const canonicalPhaseId = canonicalizePhaseId(phaseId);
+  const canonical = CANONICAL_PHASE_BY_ID.get(canonicalPhaseId) || null;
+  if (!canonical) {
+    return null;
+  }
+  return { ...canonical };
+}
+
+function buildFallbackPhaseList() {
+  return CANONICAL_PHASES.map((phase) => ({ ...phase }));
+}
+
+function mergeWithCanonicalPhases(phasesFromFirestore) {
+  const mergedById = new Map(buildFallbackPhaseList().map((phase) => [phase.phaseId, phase]));
+
+  phasesFromFirestore.forEach((phase) => {
+    const canonicalPhaseId = canonicalizePhaseId(phase.phaseId);
+    const existing = mergedById.get(canonicalPhaseId);
+    if (!existing) {
+      mergedById.set(canonicalPhaseId, { ...phase, phaseId: canonicalPhaseId });
+      return;
+    }
+
+    mergedById.set(canonicalPhaseId, {
+      ...existing,
+      ...phase,
+      phaseId: canonicalPhaseId,
+      title: phase.title || existing.title,
+      description: phase.description || existing.description,
+      level: phase.level || existing.level,
+      order: Number.isFinite(phase.order) ? phase.order : existing.order,
+      totalSeats: Number.isFinite(phase.totalSeats) ? phase.totalSeats : existing.totalSeats,
+      bookedSeats: Number.isFinite(phase.bookedSeats) ? phase.bookedSeats : existing.bookedSeats
+    });
+  });
+
+  return sortPhaseList(Array.from(mergedById.values()));
+}
+
+function normalizeUserProfile(authUser, data = {}) {
+  const phoneFromDoc = normalizeString(data.phone);
+  const phoneNumber = normalizeString(data.phoneNumber) || phoneFromDoc;
+  const whatsappNumber = normalizeString(data.whatsappNumber) || phoneFromDoc;
+  const unlockedPhases = Array.from(
+    new Set(normalizeStringArray(data.unlockedPhases).map(canonicalizePhaseId).filter(Boolean))
+  );
+  const completedPhases = Array.from(
+    new Set(normalizeStringArray(data.completedPhases).map(canonicalizePhaseId).filter(Boolean))
+  );
+
   return {
-    seatId,
-    seatNumber,
-    status: "available",
-    heldBy: null,
-    heldByName: null,
-    heldByEmail: null,
-    heldByPhone: null,
-    holdStartTime: null,
-    approvedBy: null,
-    approvedAt: null
+    name: normalizeString(data.name) || authUser?.displayName || "Unknown User",
+    email: normalizeString(data.email) || authUser?.email || "",
+    phone: phoneFromDoc || whatsappNumber || "",
+    phoneNumber,
+    whatsappNumber,
+    progress: typeof data.progress === "number" ? data.progress : 0,
+    unlockedPhases,
+    completedPhases
   };
 }
 
-function normalizeSeatDoc(docId, data = {}, defaultSeatNumber = null) {
-  const parsedSeatNumber = Number(data.seatNumber);
-  const fallbackSeatNumber = defaultSeatNumber || parseSeatNumberFromId(docId) || 0;
+function normalizePhaseDoc(docId, data = {}) {
+  const rawPhaseId = normalizeString(data.phaseId) || docId;
+  const phaseId = canonicalizePhaseId(rawPhaseId);
+  const canonical = getCanonicalPhaseById(phaseId);
+
+  const title = normalizeString(data.title);
+  const description = normalizeString(data.description);
+  const level = normalizeString(data.level);
+  const order = Number(data.order);
+  const totalSeats = Number(data.totalSeats);
+  const bookedSeats = Number(data.bookedSeats);
 
   return {
-    seatId: typeof data.seatId === "string" && data.seatId ? data.seatId : docId,
-    seatNumber: Number.isFinite(parsedSeatNumber) && parsedSeatNumber > 0 ? parsedSeatNumber : fallbackSeatNumber,
-    status: normalizeSeatStatus(data.status),
-    heldBy: typeof data.heldBy === "string" ? data.heldBy : null,
-    heldByName: typeof data.heldByName === "string" ? data.heldByName : null,
-    heldByEmail: typeof data.heldByEmail === "string" ? data.heldByEmail : null,
-    heldByPhone: typeof data.heldByPhone === "string" ? data.heldByPhone : null,
-    holdStartTimeMs: timestampToMillis(data.holdStartTime),
-    approvedBy: typeof data.approvedBy === "string" ? data.approvedBy : null,
-    approvedAtMs: timestampToMillis(data.approvedAt)
+    phaseId,
+    title: title || canonical?.title || phaseId,
+    description: description || canonical?.description || "",
+    level: level || canonical?.level || "Beginner",
+    order: Number.isFinite(order) ? order : (canonical?.order || Number.MAX_SAFE_INTEGER),
+    totalSeats: Number.isFinite(totalSeats) && totalSeats >= 0
+      ? totalSeats
+      : (canonical?.totalSeats || DEFAULT_TOTAL_SEATS),
+    bookedSeats: Number.isFinite(bookedSeats) && bookedSeats >= 0 ? bookedSeats : 0
   };
 }
 
-function createFallbackSeats() {
-  return SEAT_DOC_IDS.map((seatId, index) => normalizeSeatDoc(seatId, buildAvailableSeatPayload(seatId, index + 1), index + 1));
+function normalizeBookingStatus(value) {
+  if (
+    value === BOOKING_STATUS_PENDING ||
+    value === BOOKING_STATUS_APPROVED ||
+    value === BOOKING_STATUS_REJECTED ||
+    value === BOOKING_STATUS_CANCELLED ||
+    value === BOOKING_STATUS_EXPIRED
+  ) {
+    return value;
+  }
+  return BOOKING_STATUS_PENDING;
 }
 
-function getSeatById(seatId) {
-  return state.seats.find((seat) => seat.seatId === seatId) || null;
+function normalizeBookingDoc(docId, data = {}) {
+  const rawPhaseId = normalizeString(data.phaseId) || normalizeString(data.phase) || normalizeString(data.phaseKey);
+  const rawCanonicalPhaseId = normalizeString(data.phaseCanonicalId);
+  const rawLegacyPhaseId = normalizeString(data.phaseLegacyId);
+  const canonicalPhaseId = canonicalizePhaseId(rawCanonicalPhaseId || rawPhaseId || rawLegacyPhaseId);
+  const normalizedStatus = normalizeBookingStatus(data.status || data.requestStatus || data.bookingStatus);
+
+  return {
+    bookingId: normalizeString(data.bookingId) || docId,
+    userId: normalizeString(data.userId) || normalizeString(data.uid),
+    uid: normalizeString(data.uid) || normalizeString(data.userId),
+    phaseId: canonicalPhaseId,
+    phaseIdRaw: rawPhaseId,
+    phaseCanonicalId: canonicalPhaseId,
+    phaseLegacyId: rawLegacyPhaseId,
+    phase: rawPhaseId || canonicalPhaseId,
+    phoneNumber: normalizeString(data.phoneNumber),
+    whatsappNumber: normalizeString(data.whatsappNumber),
+    phone: normalizeString(data.phone),
+    whatsapp: normalizeString(data.whatsapp),
+    userName: normalizeString(data.userName) || normalizeString(data.name),
+    userEmail: normalizeString(data.userEmail) || normalizeString(data.email),
+    status: normalizedStatus,
+    requestStatus: normalizeBookingStatus(data.requestStatus || normalizedStatus),
+    bookingStatus: normalizeBookingStatus(data.bookingStatus || normalizedStatus),
+    createdAtMs: timestampToMillis(data.createdAt),
+    expiresAtMs: timestampToMillis(data.expiresAt)
+  };
 }
 
-function getSeatLabel(seat) {
-  return seat?.seatNumber || parseSeatNumberFromId(seat?.seatId) || "-";
-}
-
-function formatTimeLeft(ms) {
-  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
-  const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
-  const seconds = String(totalSeconds % 60).padStart(2, "0");
-  return `${minutes}:${seconds}`;
+function sortPhaseList(phases) {
+  return phases.slice().sort((a, b) => {
+    if (a.order !== b.order) {
+      return a.order - b.order;
+    }
+    return a.title.localeCompare(b.title);
+  });
 }
 
 function formatAdminValue(value) {
   return value ? String(value) : "-";
 }
 
-function announceNewPendingSeatEvents(previousSeatsById, nextSeats) {
-  if (!state.isAdmin || !state.hasLoadedSeats) {
+function formatDateTime(ms) {
+  if (!ms || !Number.isFinite(ms)) {
+    return "";
+  }
+  return new Date(ms).toLocaleString();
+}
+
+function getPhaseById(phaseId) {
+  const canonicalPhaseId = canonicalizePhaseId(phaseId);
+  return state.phases.find((phase) => phase.phaseId === canonicalPhaseId) || null;
+}
+
+function isPhaseFull(phase) {
+  if (!phase) {
+    return false;
+  }
+  return phase.totalSeats > 0 && phase.bookedSeats >= phase.totalSeats;
+}
+
+function getPreviousPhase(phaseId) {
+  const sortedPhases = sortPhaseList(state.phases);
+  const currentIndex = sortedPhases.findIndex((phase) => phase.phaseId === canonicalizePhaseId(phaseId));
+  if (currentIndex <= 0) {
+    return null;
+  }
+  return sortedPhases[currentIndex - 1];
+}
+
+function getMissingPrerequisitePhase(phaseId, unlockedPhaseSet) {
+  const previousPhase = getPreviousPhase(phaseId);
+  if (!previousPhase) {
+    return null;
+  }
+  if (unlockedPhaseSet.has(previousPhase.phaseId)) {
+    return null;
+  }
+  return previousPhase;
+}
+
+function getBookingStatusLabel(status) {
+  if (status === BOOKING_STATUS_APPROVED) {
+    return "approved";
+  }
+  if (status === BOOKING_STATUS_REJECTED) {
+    return "rejected";
+  }
+  if (status === BOOKING_STATUS_CANCELLED) {
+    return "cancelled";
+  }
+  if (status === BOOKING_STATUS_EXPIRED) {
+    return "expired";
+  }
+  return "pending";
+}
+
+function getEffectiveBookingStatus(booking) {
+  if (!booking) {
+    return BOOKING_STATUS_PENDING;
+  }
+
+  if (
+    booking.status === BOOKING_STATUS_PENDING &&
+    booking.expiresAtMs &&
+    booking.expiresAtMs <= Date.now()
+  ) {
+    return BOOKING_STATUS_EXPIRED;
+  }
+
+  return booking.status;
+}
+
+function getUnlockedPhaseSet() {
+  const unlockedSet = new Set((state.profile?.unlockedPhases || []).map(canonicalizePhaseId));
+
+  state.userBookingsByPhaseId.forEach((booking) => {
+    if (booking.status === BOOKING_STATUS_APPROVED && booking.phaseId) {
+      unlockedSet.add(booking.phaseId);
+    }
+  });
+
+  return unlockedSet;
+}
+
+function resolvePhaseState(phaseId, unlockedPhaseSet) {
+  const booking = state.userBookingsByPhaseId.get(phaseId) || null;
+  const effectiveStatus = getEffectiveBookingStatus(booking);
+
+  if (unlockedPhaseSet.has(phaseId) || booking?.status === BOOKING_STATUS_APPROVED) {
+    return { phaseState: PHASE_STATE_UNLOCKED, booking };
+  }
+  if (effectiveStatus === BOOKING_STATUS_PENDING) {
+    return { phaseState: PHASE_STATE_PENDING, booking };
+  }
+  if (effectiveStatus === BOOKING_STATUS_EXPIRED) {
+    return { phaseState: PHASE_STATE_LOCKED, booking: { ...booking, status: BOOKING_STATUS_EXPIRED } };
+  }
+  return { phaseState: PHASE_STATE_LOCKED, booking };
+}
+
+function buildPhaseStatusText(phase, phaseState, booking, missingPrerequisitePhase) {
+  if (phaseState === PHASE_STATE_UNLOCKED) {
+    return "Approved and unlocked.";
+  }
+  if (phaseState === PHASE_STATE_PENDING) {
+    if (booking?.expiresAtMs) {
+      return `Waiting for approval. Expires: ${formatDateTime(booking.expiresAtMs)}.`;
+    }
+    return "Waiting for admin approval.";
+  }
+  if (missingPrerequisitePhase) {
+    return `Complete ${missingPrerequisitePhase.title} before requesting this phase.`;
+  }
+  if (isPhaseFull(phase)) {
+    return "No seats available for this phase right now.";
+  }
+  if (booking?.status === BOOKING_STATUS_REJECTED) {
+    return "Your previous request was rejected. You can submit again.";
+  }
+  if (booking?.status === BOOKING_STATUS_CANCELLED) {
+    return "Your seat access was cancelled by admin. Request again to continue.";
+  }
+  if (booking?.status === BOOKING_STATUS_EXPIRED) {
+    return "Previous request expired. You can submit again.";
+  }
+  return "Request access to unlock this phase.";
+}
+
+function renderPhases() {
+  elements.phaseList.innerHTML = "";
+  elements.phaseFilterButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.phaseFilter === state.selectedPhaseTrack);
+  });
+
+  const sortedPhases = sortPhaseList(state.phases);
+  if (sortedPhases.length === 0) {
+    const emptyState = document.createElement("p");
+    emptyState.className = "phase-empty";
+    emptyState.textContent = "No phases available.";
+    elements.phaseList.appendChild(emptyState);
     return;
   }
 
-  const newPendingEvents = findNewPendingSeatEvents(previousSeatsById, nextSeats);
-  newPendingEvents.forEach((eventInfo) => {
-    const speakResult = speakNotificationOnce(eventInfo.eventId, eventInfo.text);
+  const unlockedPhaseSet = getUnlockedPhaseSet();
+  const selectedTrack = state.selectedPhaseTrack || PHASE_TRACK_BEGINNER;
+  const visiblePhases = sortedPhases.filter((phase) => toTrackName(phase.level) === selectedTrack);
 
-    if (
-      !speakResult.ok &&
-      speakResult.reason === "interaction-required" &&
-      !state.hasShownSoundUnlockHint
-    ) {
-      state.hasShownSoundUnlockHint = true;
-      showMessage("Voice alerts are ready. Tap anywhere once to enable audio notifications.", "info");
+  if (visiblePhases.length === 0) {
+    const emptyState = document.createElement("p");
+    emptyState.className = "phase-empty";
+    emptyState.textContent = "No phases available in this track.";
+    elements.phaseList.appendChild(emptyState);
+    return;
+  }
+
+  visiblePhases.forEach((phase) => {
+    const { phaseState, booking } = resolvePhaseState(phase.phaseId, unlockedPhaseSet);
+    const missingPrerequisitePhase = getMissingPrerequisitePhase(phase.phaseId, unlockedPhaseSet);
+    const phaseIsFull = isPhaseFull(phase);
+
+    const card = document.createElement("article");
+    card.className = "phase-card";
+    card.classList.toggle("phase-card-full", phaseIsFull);
+
+    const header = document.createElement("div");
+    header.className = "phase-card-header";
+
+    const titleWrap = document.createElement("div");
+
+    const title = document.createElement("h3");
+    title.className = "phase-title";
+    title.textContent = phase.title;
+
+    const subtitle = document.createElement("p");
+    subtitle.className = "phase-subtitle";
+    subtitle.textContent = `Level: ${phase.level}`;
+
+    titleWrap.appendChild(title);
+    titleWrap.appendChild(subtitle);
+
+    const stateBadge = document.createElement("span");
+    stateBadge.className = `phase-state ${phaseState.toLowerCase()}`;
+    stateBadge.textContent = phaseState;
+
+    header.appendChild(titleWrap);
+    header.appendChild(stateBadge);
+
+    const meta = document.createElement("p");
+    meta.className = "phase-meta";
+    const availableSeats = Math.max(phase.totalSeats - phase.bookedSeats, 0);
+    meta.textContent = `Seats available: ${availableSeats} / ${phase.totalSeats}`;
+
+    const description = document.createElement("p");
+    description.className = "phase-description";
+    description.textContent = phase.description || "No description.";
+
+    const statusText = document.createElement("p");
+    statusText.className = "phase-status-text";
+    statusText.textContent = buildPhaseStatusText(phase, phaseState, booking, missingPrerequisitePhase);
+
+    const actionButton = document.createElement("button");
+    actionButton.type = "button";
+    actionButton.className = "phase-action-btn";
+
+    if (phaseState === PHASE_STATE_LOCKED) {
+      if (missingPrerequisitePhase) {
+        actionButton.disabled = true;
+        actionButton.textContent = "Locked by Progress";
+      } else if (phaseIsFull) {
+        actionButton.disabled = true;
+        actionButton.textContent = "No Seats Available";
+      } else {
+        actionButton.disabled = false;
+        if (!state.user) {
+          actionButton.textContent = "Login to Book Seat";
+        } else if (
+          booking?.status === BOOKING_STATUS_EXPIRED ||
+          booking?.status === BOOKING_STATUS_REJECTED ||
+          booking?.status === BOOKING_STATUS_CANCELLED
+        ) {
+          actionButton.textContent = "Request Again";
+        } else {
+          actionButton.textContent = "Book Seat";
+        }
+        actionButton.addEventListener("click", () => {
+          void handlePhaseClick(phase.phaseId);
+        });
+      }
+    } else if (phaseState === PHASE_STATE_PENDING) {
+      actionButton.disabled = true;
+      actionButton.textContent = "Waiting Approval";
+    } else {
+      actionButton.disabled = true;
+      actionButton.textContent = "Unlocked";
     }
+
+    card.appendChild(header);
+    card.appendChild(meta);
+    card.appendChild(description);
+    card.appendChild(statusText);
+    card.appendChild(actionButton);
+    elements.phaseList.appendChild(card);
   });
-}
-
-function renderSeats() {
-  elements.seatGrid.innerHTML = "";
-
-  state.seats
-    .slice()
-    .sort((a, b) => a.seatNumber - b.seatNumber)
-    .forEach((seat) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.classList.add("seat");
-
-      const seatNumberLabel = document.createElement("span");
-      seatNumberLabel.className = "seat-num";
-      seatNumberLabel.textContent = String(getSeatLabel(seat));
-
-      const seatTimeLabel = document.createElement("span");
-      seatTimeLabel.className = "seat-time";
-
-      const isMine = Boolean(state.user && seat.heldBy === state.user.uid);
-
-      if (seat.status === "available") {
-        seatTimeLabel.textContent = "Available";
-        button.disabled = false;
-        button.title = `Seat ${getSeatLabel(seat)} - Available`;
-      } else if (seat.status === "pending") {
-        const msLeft = seat.holdStartTimeMs ? HOLD_DURATION_MS - (Date.now() - seat.holdStartTimeMs) : null;
-        seatTimeLabel.textContent = msLeft === null ? "Pending" : formatTimeLeft(msLeft);
-        button.disabled = true;
-        button.title = `Seat ${getSeatLabel(seat)} - Pending`;
-        if (isMine) {
-          button.classList.add("selected");
-          button.title = `Seat ${getSeatLabel(seat)} - Your pending seat`;
-        } else {
-          button.classList.add("pending");
-        }
-      } else if (seat.status === "confirmed") {
-        seatTimeLabel.textContent = "Confirmed";
-        button.disabled = true;
-        button.title = `Seat ${getSeatLabel(seat)} - Confirmed`;
-        if (isMine) {
-          button.classList.add("selected");
-          button.title = `Seat ${getSeatLabel(seat)} - Your confirmed seat`;
-        } else {
-          button.classList.add("confirmed");
-        }
-      }
-
-      if (isMine) {
-        button.classList.add("selected");
-      }
-
-      button.addEventListener("click", () => {
-        void handleSeatClick(seat.seatId);
-      });
-
-      button.appendChild(seatNumberLabel);
-      button.appendChild(seatTimeLabel);
-      elements.seatGrid.appendChild(button);
-    });
-
-  renderAdminPanel();
 }
 
 function renderAdminPanel() {
   if (!elements.adminPanel || !elements.adminRows || !elements.adminEmpty) {
     return;
   }
+
+  elements.adminTabButtons.forEach((button) => {
+    button.classList.toggle("active", button.dataset.adminTab === state.selectedAdminTab);
+  });
 
   if (!state.isAdmin) {
     elements.adminPanel.classList.add("hidden");
@@ -446,51 +855,79 @@ function renderAdminPanel() {
   elements.adminPanel.classList.remove("hidden");
   elements.adminRows.innerHTML = "";
 
-  const heldSeats = state.seats
-    .filter((seat) => seat.status === "pending")
-    .sort((a, b) => a.seatNumber - b.seatNumber);
+  const sourceBookings = state.selectedAdminTab === "all"
+    ? state.adminAllBookings
+    : state.adminPendingBookings;
 
-  if (heldSeats.length === 0) {
+  const bookings = sourceBookings.slice().sort((a, b) => {
+    const aCreated = a.createdAtMs || 0;
+    const bCreated = b.createdAtMs || 0;
+    return bCreated - aCreated;
+  });
+
+  if (bookings.length === 0) {
+    elements.adminEmpty.textContent = state.selectedAdminTab === "all"
+      ? "No bookings yet."
+      : "No pending bookings right now.";
     elements.adminEmpty.classList.remove("hidden");
     return;
   }
 
   elements.adminEmpty.classList.add("hidden");
 
-  heldSeats.forEach((seat) => {
+  bookings.forEach((booking) => {
+    const effectiveStatus = getEffectiveBookingStatus(booking);
+    const statusText = getBookingStatusLabel(effectiveStatus);
+
     const row = document.createElement("tr");
-    const msLeft = seat.holdStartTimeMs ? HOLD_DURATION_MS - (Date.now() - seat.holdStartTimeMs) : null;
+    const phoneValue = booking.phoneNumber || booking.phone || "-";
+    const whatsappValue = booking.whatsappNumber || booking.whatsapp || "-";
 
     row.innerHTML = `
-      <td>${getSeatLabel(seat)}</td>
-      <td>${formatAdminValue(seat.heldByName)}</td>
-      <td>${formatAdminValue(seat.heldByEmail)}</td>
-      <td>${formatAdminValue(seat.heldByPhone)}</td>
-      <td>${msLeft === null ? "--:--" : formatTimeLeft(msLeft)}</td>
-      <td>Held</td>
+      <td>${formatAdminValue(booking.userId)}</td>
+      <td>${formatAdminValue(booking.phaseId)}</td>
+      <td>${formatAdminValue(phoneValue)}</td>
+      <td>${formatAdminValue(whatsappValue)}</td>
+      <td>${formatDateTime(booking.createdAtMs) || "-"}</td>
+      <td>${formatDateTime(booking.expiresAtMs) || "-"}</td>
+      <td><span class="admin-status ${statusText}">${statusText}</span></td>
       <td class="admin-actions-cell"></td>
     `;
 
     const actionsCell = row.querySelector(".admin-actions-cell");
 
-    const approveBtn = document.createElement("button");
-    approveBtn.type = "button";
-    approveBtn.className = "admin-action-btn approve";
-    approveBtn.textContent = "Approve";
-    approveBtn.addEventListener("click", () => {
-      void approveSeatByAdmin(seat);
-    });
+    if (effectiveStatus === BOOKING_STATUS_PENDING) {
+      const approveBtn = document.createElement("button");
+      approveBtn.type = "button";
+      approveBtn.className = "admin-action-btn approve";
+      approveBtn.textContent = "Approve";
+      approveBtn.addEventListener("click", () => {
+        void approveBookingByAdmin(booking);
+      });
 
-    const rejectBtn = document.createElement("button");
-    rejectBtn.type = "button";
-    rejectBtn.className = "admin-action-btn reject";
-    rejectBtn.textContent = "Reject";
-    rejectBtn.addEventListener("click", () => {
-      void rejectSeatByAdmin(seat);
-    });
+      const rejectBtn = document.createElement("button");
+      rejectBtn.type = "button";
+      rejectBtn.className = "admin-action-btn reject";
+      rejectBtn.textContent = "Reject";
+      rejectBtn.addEventListener("click", () => {
+        void rejectBookingByAdmin(booking);
+      });
 
-    actionsCell.appendChild(approveBtn);
-    actionsCell.appendChild(rejectBtn);
+      actionsCell.appendChild(approveBtn);
+      actionsCell.appendChild(rejectBtn);
+    } else if (state.selectedAdminTab === "all" && effectiveStatus === BOOKING_STATUS_APPROVED) {
+      const cancelBtn = document.createElement("button");
+      cancelBtn.type = "button";
+      cancelBtn.className = "admin-action-btn cancel";
+      cancelBtn.textContent = "Cancel Seat";
+      cancelBtn.addEventListener("click", () => {
+        void cancelApprovedBookingByAdmin(booking);
+      });
+      actionsCell.appendChild(cancelBtn);
+    } else {
+      actionsCell.textContent = "-";
+    }
+
     elements.adminRows.appendChild(row);
   });
 }
@@ -514,13 +951,21 @@ function updateAuthButtons() {
 function updateProfileUI() {
   if (!state.user || !state.profile) {
     elements.profileCard.classList.add("hidden");
+    if (elements.adminChip) {
+      elements.adminChip.classList.add("hidden");
+    }
     return;
   }
 
   elements.profileCard.classList.remove("hidden");
   elements.profileName.textContent = state.profile.name || "-";
   elements.profileEmail.textContent = state.profile.email || "-";
-  elements.profilePhone.textContent = state.profile.phone || "-";
+  elements.profilePhoneNumber.textContent = state.profile.phoneNumber || "-";
+  elements.profileWhatsapp.textContent = state.profile.whatsappNumber || "-";
+
+  if (elements.adminChip) {
+    elements.adminChip.classList.toggle("hidden", !state.isAdmin);
+  }
 }
 
 function showLoginModal() {
@@ -531,9 +976,24 @@ function hideLoginModal() {
   elements.loginModal.classList.add("hidden");
 }
 
-function showPhoneModal() {
+function showPhoneModal(phaseId = null) {
+  if (phaseId !== null) {
+    state.pendingPhaseId = phaseId;
+  }
+
+  const isBookingFlow = Boolean(state.pendingPhaseId);
+  elements.phoneTitle.textContent = isBookingFlow
+    ? "Enter booking contact details"
+    : "Update contact details";
+  elements.phoneSubmitBtn.textContent = isBookingFlow
+    ? "Submit Booking"
+    : "Save Profile";
+
+  elements.phoneNumberInput.value = state.profile?.phoneNumber || "";
+  elements.whatsappInput.value = state.profile?.whatsappNumber || state.profile?.phone || "";
+
   elements.phoneModal.classList.remove("hidden");
-  elements.phoneInput.focus();
+  elements.phoneNumberInput.focus();
 }
 
 function hidePhoneModal() {
@@ -543,6 +1003,26 @@ function hidePhoneModal() {
 function isValidPhone(value) {
   const normalized = value.replace(/[\s\-()]/g, "");
   return /^\+?[0-9]{8,15}$/.test(normalized);
+}
+
+function announceNewPendingBookingEvents(previousBookingsById, nextBookings) {
+  if (!state.isAdmin || !state.hasLoadedAdminBookings) {
+    return;
+  }
+
+  const newPendingEvents = findNewPendingBookingEvents(previousBookingsById, nextBookings);
+  newPendingEvents.forEach((eventInfo) => {
+    const speakResult = speakNotificationOnce(eventInfo.eventId, eventInfo.text);
+
+    if (
+      !speakResult.ok &&
+      speakResult.reason === "interaction-required" &&
+      !state.hasShownSoundUnlockHint
+    ) {
+      state.hasShownSoundUnlockHint = true;
+      showMessage("Voice alerts are ready. Tap anywhere once to enable audio notifications.", "info");
+    }
+  });
 }
 
 async function handleLogin() {
@@ -575,43 +1055,13 @@ async function handleLogout() {
 
   try {
     await signOutFn(auth);
-    state.pendingSeatId = null;
-    renderSeats();
     showMessage("Logged out.", "info");
   } catch (error) {
     showMessage(`Logout failed: ${error.message}`, "error");
   }
 }
 
-async function loadUserProfile(user) {
-  if (!db || !docFn || !getDocFn) {
-    throw new Error("Firestore is not initialized.");
-  }
-
-  const userRef = docFn(db, "users", user.uid);
-  const snapshot = await getDocFn(userRef);
-
-  if (!snapshot.exists()) {
-    state.profile = {
-      name: user.displayName || "Unknown User",
-      email: user.email || "",
-      phone: ""
-    };
-    updateProfileUI();
-    return;
-  }
-
-  const data = snapshot.data();
-  state.profile = {
-    name: data.name || user.displayName || "Unknown User",
-    email: data.email || user.email || "",
-    phone: data.phone || ""
-  };
-  updateProfileUI();
-  showMessage("Profile loaded.", "success");
-}
-
-async function saveUserProfile(phoneNumber) {
+async function saveUserProfile(phoneNumber, whatsappNumber) {
   if (!state.user) {
     throw new Error("User not authenticated.");
   }
@@ -620,152 +1070,254 @@ async function saveUserProfile(phoneNumber) {
   }
 
   const userRef = docFn(db, "users", state.user.uid);
-  await setDocFn(
-    userRef,
-    {
-      name: state.user.displayName || "Unknown User",
-      email: state.user.email || "",
-      phone: phoneNumber,
-      createdAt: serverTimestampFn()
-    },
-    { merge: true }
-  );
-
-  state.profile = {
+  const payload = {
     name: state.user.displayName || "Unknown User",
     email: state.user.email || "",
-    phone: phoneNumber
+    phone: whatsappNumber,
+    phoneNumber,
+    whatsappNumber,
+    updatedAt: serverTimestampFn()
   };
-  updateProfileUI();
-}
 
-async function continuePendingSeatFlow() {
-  if (state.pendingSeatId === null) {
-    return;
+  if (!state.userDocExists) {
+    payload.createdAt = serverTimestampFn();
+    payload.progress = 0;
+    payload.unlockedPhases = [];
+    payload.completedPhases = [];
   }
 
-  const seatId = state.pendingSeatId;
-  state.pendingSeatId = null;
-  await holdSeatInFirestore(seatId);
+  await setDocFn(userRef, payload, { merge: true });
+
+  state.profile = {
+    ...normalizeUserProfile(state.user, {}),
+    ...state.profile,
+    name: state.user.displayName || "Unknown User",
+    email: state.user.email || "",
+    phone: whatsappNumber,
+    phoneNumber,
+    whatsappNumber
+  };
+  updateProfileUI();
+  renderPhases();
 }
 
-async function holdSeatInFirestore(seatId) {
+function buildBookingPayload(
+  bookingId,
+  userId,
+  canonicalPhaseId,
+  phoneNumber,
+  whatsappNumber
+) {
+  const resolvedCanonicalPhaseId = canonicalizePhaseId(canonicalPhaseId);
+  const legacyPhaseId = getLegacyPhaseIdForCanonical(resolvedCanonicalPhaseId);
+  const legacyPhaseAlias = legacyPhaseId || resolvedCanonicalPhaseId;
+  const createdAtMs = Date.now();
+  const expiresAtMs = createdAtMs + BOOKING_EXPIRY_MS;
+
+  // Must stay schema-compatible with the mobile app and Cloud Function trigger expectations.
+  return {
+    bookingId,
+    id: bookingId,
+    userId,
+    uid: userId,
+    phaseId: resolvedCanonicalPhaseId,
+    phase: legacyPhaseAlias,
+    phaseKey: legacyPhaseAlias,
+    phaseCanonicalId: resolvedCanonicalPhaseId,
+    phaseLegacyId: legacyPhaseId || null,
+    phaseIdAliases: Array.from(new Set([resolvedCanonicalPhaseId, legacyPhaseId].filter(Boolean))),
+    userName: state.user?.displayName || "",
+    name: state.user?.displayName || "",
+    userEmail: state.user?.email || "",
+    email: state.user?.email || "",
+    phone: phoneNumber,
+    whatsapp: whatsappNumber,
+    phoneNumber,
+    whatsappNumber,
+    status: BOOKING_STATUS_PENDING,
+    requestStatus: BOOKING_STATUS_PENDING,
+    bookingStatus: BOOKING_STATUS_PENDING,
+    createdAtMs,
+    createdAt: createdAtMs,
+    updatedAtMs: createdAtMs,
+    updatedAt: createdAtMs,
+    source: "web",
+    expiresAtMs,
+    expiresAt: expiresAtMs
+  };
+}
+
+function buildCanonicalPhasePayload(phaseId) {
+  const canonicalPhaseId = canonicalizePhaseId(phaseId);
+  const canonical = getCanonicalPhaseById(canonicalPhaseId);
+
+  if (canonical) {
+    return { ...canonical, phaseId: canonicalPhaseId };
+  }
+
+  return {
+    phaseId: canonicalPhaseId,
+    title: canonicalPhaseId,
+    description: "",
+    level: "Beginner",
+    order: Number.MAX_SAFE_INTEGER,
+    totalSeats: DEFAULT_TOTAL_SEATS,
+    bookedSeats: 0
+  };
+}
+
+async function requestBookingForPhase(phaseId, phoneNumber, whatsappNumber) {
   if (!state.firebaseReady || !db || !runTransactionFn || !docFn || !serverTimestampFn) {
     showMessage("Firestore is not ready.", "error");
-    return;
+    return false;
   }
   if (!state.user) {
     showMessage("Please log in first.", "error");
-    return;
-  }
-  if (!state.profile || !state.profile.phone) {
-    showMessage("Enter your phone number first.", "error");
-    return;
+    return false;
   }
 
-  const seatRefs = SEAT_DOC_IDS.map((id) => docFn(db, "seats", id));
+  const canonicalPhaseId = canonicalizePhaseId(phaseId);
+  const selectedPhase = getPhaseById(canonicalPhaseId);
+  if (!selectedPhase) {
+    showMessage("Phase not found.", "error");
+    return false;
+  }
+
+  const unlockedPhaseSet = getUnlockedPhaseSet();
+  const missingPrerequisitePhase = getMissingPrerequisitePhase(canonicalPhaseId, unlockedPhaseSet);
+  if (missingPrerequisitePhase) {
+    showMessage(`Complete ${missingPrerequisitePhase.title} first.`, "info");
+    return false;
+  }
+
+  if (isPhaseFull(selectedPhase)) {
+    showMessage("No seats available for this phase.", "error");
+    return false;
+  }
+
+  const userId = state.user.uid;
+  const bookingId = `${userId}_${canonicalPhaseId}`;
+  const bookingRef = docFn(db, "bookings", bookingId);
+  const canonicalPhaseRef = docFn(db, "phases", canonicalPhaseId);
+  const legacyPhaseId = getLegacyPhaseIdForCanonical(canonicalPhaseId);
+  const legacyPhaseRef = legacyPhaseId ? docFn(db, "phases", legacyPhaseId) : null;
 
   try {
     await runTransactionFn(db, async (transaction) => {
-      const snapshots = await Promise.all(seatRefs.map((seatRef) => transaction.get(seatRef)));
-      const targetSnapshot = snapshots.find((snapshot) => snapshot.id === seatId) || null;
+      const canonicalPhaseSnapshot = await transaction.get(canonicalPhaseRef);
+      let checkedPhaseSnapshot = canonicalPhaseSnapshot;
 
-      snapshots.forEach((snapshot, index) => {
-        if (!snapshot.exists()) {
-          return;
+      if (!canonicalPhaseSnapshot.exists() && legacyPhaseRef) {
+        const legacyPhaseSnapshot = await transaction.get(legacyPhaseRef);
+        if (legacyPhaseSnapshot.exists()) {
+          checkedPhaseSnapshot = legacyPhaseSnapshot;
         }
-        const normalized = normalizeSeatDoc(snapshot.id, snapshot.data(), index + 1);
-        const reservedByCurrentUser =
-          normalized.heldBy === state.user.uid &&
-          (normalized.status === "pending" || normalized.status === "confirmed");
-
-        if (reservedByCurrentUser) {
-          throw makeAppError("already-has-seat", "You already have a seat reserved.");
-        }
-      });
-
-      if (!targetSnapshot || !targetSnapshot.exists()) {
-        throw makeAppError("seat-not-found", `Seat ${seatId} is missing in Firestore.`);
       }
 
-      const targetSeat = normalizeSeatDoc(targetSnapshot.id, targetSnapshot.data(), parseSeatNumberFromId(seatId));
-      if (targetSeat.status !== "available") {
-        throw makeAppError("seat-unavailable", "Seat is no longer available.");
+      if (checkedPhaseSnapshot.exists()) {
+        const livePhase = normalizePhaseDoc(checkedPhaseSnapshot.id, checkedPhaseSnapshot.data());
+        if (isPhaseFull(livePhase)) {
+          throw makeAppError("phase-full", "Phase has reached totalSeats.");
+        }
       }
 
-      const seatRef = docFn(db, "seats", seatId);
+      const bookingSnapshot = await transaction.get(bookingRef);
+      if (bookingSnapshot.exists()) {
+        const existingBooking = normalizeBookingDoc(bookingSnapshot.id, bookingSnapshot.data());
+        const hasExpiredPendingWindow = getEffectiveBookingStatus(existingBooking) === BOOKING_STATUS_EXPIRED;
+
+        if (existingBooking.status === BOOKING_STATUS_PENDING && !hasExpiredPendingWindow) {
+          throw makeAppError("booking-pending", "Booking is already pending.");
+        }
+        if (existingBooking.status === BOOKING_STATUS_APPROVED) {
+          throw makeAppError("booking-approved", "Phase is already approved for this user.");
+        }
+      }
+
       transaction.set(
-        seatRef,
-        {
-          seatId,
-          seatNumber: targetSeat.seatNumber,
-          status: "pending",
-          heldBy: state.user.uid,
-          heldByName: state.profile.name || state.user.displayName || "Unknown User",
-          heldByEmail: state.profile.email || state.user.email || "",
-          heldByPhone: state.profile.phone || "",
-          holdStartTime: serverTimestampFn(),
-          approvedBy: null,
-          approvedAt: null
-        },
-        { merge: true }
+        bookingRef,
+        buildBookingPayload(
+          bookingId,
+          userId,
+          canonicalPhaseId,
+          phoneNumber,
+          whatsappNumber
+        )
       );
     });
 
-    const seat = getSeatById(seatId);
-    const seatLabel = seat ? getSeatLabel(seat) : parseSeatNumberFromId(seatId);
-    showMessage(`Seat ${seatLabel} set to pending for 15:00.`, "success");
+    showMessage("Booking request submitted and waiting for admin approval.", "success");
+    return true;
   } catch (error) {
-    if (error?.code === "already-has-seat") {
-      showMessage("You already have a seat reserved.", "error");
-    } else if (error?.code === "seat-unavailable") {
-      showMessage("Seat is no longer available.", "error");
-    } else if (error?.code === "seat-not-found") {
-      showMessage("Seat document not found. Check seat_001 to seat_010 in Firestore.", "error");
+    if (error?.code === "phase-full") {
+      showMessage("No seats available for this phase.", "error");
+    } else if (error?.code === "booking-pending") {
+      showMessage("You already have a pending booking for this phase.", "info");
+    } else if (error?.code === "booking-approved") {
+      showMessage("This phase is already approved for your account.", "info");
     } else if (isPermissionDeniedError(error)) {
-      showMessage("Booking blocked by Firestore rules. Allow authenticated seat updates.", "error");
+      showMessage("Booking blocked by Firestore rules.", "error");
     } else {
-      showMessage(`Failed to reserve seat: ${error.message}`, "error");
+      showMessage(`Failed to submit booking: ${error.message}`, "error");
     }
+    return false;
   }
 }
 
-async function rejectSeatByAdmin(seat) {
-  if (!state.isAdmin || !state.firebaseReady || !db || !runTransactionFn || !docFn) {
+async function rejectBookingByAdmin(booking) {
+  if (!state.isAdmin || !state.firebaseReady || !db || !runTransactionFn || !docFn || !serverTimestampFn) {
     return;
   }
 
   try {
     await runTransactionFn(db, async (transaction) => {
-      const seatRef = docFn(db, "seats", seat.seatId);
-      const liveSnapshot = await transaction.get(seatRef);
+      const bookingRef = docFn(db, "bookings", booking.bookingId);
+      const liveSnapshot = await transaction.get(bookingRef);
 
       if (!liveSnapshot.exists()) {
-        throw makeAppError("seat-not-found", "Seat document not found.");
+        throw makeAppError("booking-not-found", "Booking document not found.");
       }
 
-      const liveSeat = normalizeSeatDoc(liveSnapshot.id, liveSnapshot.data(), seat.seatNumber);
-      transaction.set(seatRef, buildAvailableSeatPayload(liveSeat.seatId, liveSeat.seatNumber), { merge: true });
+      const liveBooking = normalizeBookingDoc(liveSnapshot.id, liveSnapshot.data());
+      if (liveBooking.status !== BOOKING_STATUS_PENDING) {
+        throw makeAppError("booking-not-pending", "Only pending bookings can be rejected.");
+      }
+      if (getEffectiveBookingStatus(liveBooking) === BOOKING_STATUS_EXPIRED) {
+        throw makeAppError("booking-expired", "This pending booking has expired.");
+      }
+
+      transaction.update(bookingRef, {
+        status: BOOKING_STATUS_REJECTED,
+        requestStatus: BOOKING_STATUS_REJECTED,
+        bookingStatus: BOOKING_STATUS_REJECTED,
+        updatedAt: serverTimestampFn(),
+        updatedAtMs: Date.now(),
+        rejectedAt: serverTimestampFn()
+      });
     });
 
-    showMessage(`Seat ${getSeatLabel(seat)} was rejected and reset to available.`, "success");
+    showMessage(`Booking ${booking.bookingId} rejected.`, "success");
   } catch (error) {
-    if (isPermissionDeniedError(error)) {
+    if (error?.code === "booking-not-pending") {
+      showMessage("Only pending bookings can be rejected.", "error");
+    } else if (error?.code === "booking-expired") {
+      showMessage("This booking already expired. No action needed.", "info");
+    } else if (isPermissionDeniedError(error)) {
       showMessage("Reject action blocked by Firestore rules.", "error");
     } else {
-      showMessage(`Failed to reject seat: ${error.message}`, "error");
+      showMessage(`Failed to reject booking: ${error.message}`, "error");
     }
   }
 }
 
-async function approveSeatByAdmin(seat) {
+async function approveBookingByAdmin(booking) {
   if (
     !state.isAdmin ||
-    !state.user ||
     !state.firebaseReady ||
     !db ||
     !runTransactionFn ||
     !docFn ||
+    !arrayUnionFn ||
     !serverTimestampFn
   ) {
     return;
@@ -773,268 +1325,467 @@ async function approveSeatByAdmin(seat) {
 
   try {
     await runTransactionFn(db, async (transaction) => {
-      const seatRef = docFn(db, "seats", seat.seatId);
-      const liveSnapshot = await transaction.get(seatRef);
+      const bookingRef = docFn(db, "bookings", booking.bookingId);
+      const liveBookingSnapshot = await transaction.get(bookingRef);
 
-      if (!liveSnapshot.exists()) {
-        throw makeAppError("seat-not-found", "Seat document not found.");
+      if (!liveBookingSnapshot.exists()) {
+        throw makeAppError("booking-not-found", "Booking document not found.");
       }
 
-      const liveSeat = normalizeSeatDoc(liveSnapshot.id, liveSnapshot.data(), seat.seatNumber);
-      if (liveSeat.status !== "pending") {
-        throw makeAppError("seat-not-pending", "Only pending seats can be approved.");
+      const liveBooking = normalizeBookingDoc(liveBookingSnapshot.id, liveBookingSnapshot.data());
+      if (liveBooking.status !== BOOKING_STATUS_PENDING) {
+        throw makeAppError("booking-not-pending", "Only pending bookings can be approved.");
+      }
+      if (getEffectiveBookingStatus(liveBooking) === BOOKING_STATUS_EXPIRED) {
+        throw makeAppError("booking-expired", "This pending booking has expired.");
+      }
+      if (!liveBooking.phaseId || !liveBooking.userId) {
+        throw makeAppError("invalid-booking", "Booking is missing userId or phaseId.");
       }
 
-      transaction.set(
-        seatRef,
-        {
-          status: "confirmed",
-          holdStartTime: null,
-          approvedBy: state.user.uid,
-          approvedAt: serverTimestampFn()
-        },
-        { merge: true }
-      );
+      const canonicalPhaseRef = docFn(db, "phases", liveBooking.phaseId);
+      const legacyPhaseId = getLegacyPhaseIdForCanonical(liveBooking.phaseId);
+      const legacyPhaseRef = legacyPhaseId ? docFn(db, "phases", legacyPhaseId) : null;
+
+      const canonicalPhaseSnapshot = await transaction.get(canonicalPhaseRef);
+      let targetPhaseRef = canonicalPhaseRef;
+      let targetPhaseSnapshot = canonicalPhaseSnapshot;
+
+      if (!canonicalPhaseSnapshot.exists() && legacyPhaseRef) {
+        const legacyPhaseSnapshot = await transaction.get(legacyPhaseRef);
+        if (legacyPhaseSnapshot.exists()) {
+          targetPhaseRef = legacyPhaseRef;
+          targetPhaseSnapshot = legacyPhaseSnapshot;
+        }
+      }
+
+      const livePhase = targetPhaseSnapshot.exists()
+        ? normalizePhaseDoc(targetPhaseSnapshot.id, targetPhaseSnapshot.data())
+        : normalizePhaseDoc(liveBooking.phaseId, buildCanonicalPhasePayload(liveBooking.phaseId));
+      if (livePhase.totalSeats > 0 && livePhase.bookedSeats >= livePhase.totalSeats) {
+        throw makeAppError("phase-full", "Phase has reached totalSeats.");
+      }
+
+      const userRef = docFn(db, "users", liveBooking.userId);
+      const nextBookedSeats = Math.max(livePhase.bookedSeats + 1, 0);
+      const phasePayload = {
+        ...buildCanonicalPhasePayload(liveBooking.phaseId),
+        ...targetPhaseSnapshot.data(),
+        phaseId: livePhase.phaseId,
+        bookedSeats: nextBookedSeats
+      };
+
+      // Keep approval transaction aligned with mobile app behavior.
+      transaction.update(bookingRef, {
+        status: BOOKING_STATUS_APPROVED,
+        requestStatus: BOOKING_STATUS_APPROVED,
+        bookingStatus: BOOKING_STATUS_APPROVED,
+        updatedAt: serverTimestampFn(),
+        updatedAtMs: Date.now(),
+        approvedAt: serverTimestampFn(),
+        approvedBy: state.user?.uid || null
+      });
+      transaction.set(targetPhaseRef, phasePayload, { merge: true });
+      transaction.set(userRef, { unlockedPhases: arrayUnionFn(liveBooking.phaseId) }, { merge: true });
     });
 
-    showMessage(`Seat ${getSeatLabel(seat)} approved and confirmed.`, "success");
+    showMessage(`Booking ${booking.bookingId} approved.`, "success");
   } catch (error) {
-    if (error?.code === "seat-not-pending") {
-      showMessage("Only pending seats can be approved.", "error");
+    if (error?.code === "booking-not-pending") {
+      showMessage("Only pending bookings can be approved.", "error");
+    } else if (error?.code === "booking-expired") {
+      showMessage("Cannot approve: booking has expired.", "error");
+    } else if (error?.code === "phase-full") {
+      showMessage("Cannot approve: phase has no available seats.", "error");
     } else if (isPermissionDeniedError(error)) {
       showMessage("Approve action blocked by Firestore rules.", "error");
     } else {
-      showMessage(`Failed to approve seat: ${error.message}`, "error");
+      showMessage(`Failed to approve booking: ${error.message}`, "error");
     }
   }
 }
 
-function syncSeatTimer() {
-  const hasPendingSeats = state.seats.some((seat) => seat.status === "pending");
-
-  if (hasPendingSeats && !state.timerIntervalId) {
-    state.timerIntervalId = setInterval(checkSeatExpiry, 1000);
-    return;
-  }
-
-  if (!hasPendingSeats && state.timerIntervalId) {
-    clearInterval(state.timerIntervalId);
-    state.timerIntervalId = null;
-  }
-}
-
-async function expireSeatIfNeeded(seat) {
+async function cancelApprovedBookingByAdmin(booking) {
   if (
+    !state.isAdmin ||
     !state.firebaseReady ||
     !db ||
     !runTransactionFn ||
     !docFn ||
-    !seat ||
-    seat.status !== "pending" ||
-    !seat.holdStartTimeMs
+    !arrayRemoveFn ||
+    !serverTimestampFn
   ) {
     return;
   }
 
-  if (Date.now() - seat.holdStartTimeMs < HOLD_DURATION_MS) {
-    return;
-  }
-
-  if (state.expiringSeatIds.has(seat.seatId)) {
-    return;
-  }
-  state.expiringSeatIds.add(seat.seatId);
-
-  // IMPORTANT:
-  // This expiry logic runs in frontend code only for testing flow.
-  // Production systems should enforce expiry with trusted backend logic.
   try {
     await runTransactionFn(db, async (transaction) => {
-      const seatRef = docFn(db, "seats", seat.seatId);
-      const liveSnapshot = await transaction.get(seatRef);
-      if (!liveSnapshot.exists()) {
-        return;
+      const bookingRef = docFn(db, "bookings", booking.bookingId);
+      const liveBookingSnapshot = await transaction.get(bookingRef);
+
+      if (!liveBookingSnapshot.exists()) {
+        throw makeAppError("booking-not-found", "Booking document not found.");
       }
 
-      const liveSeat = normalizeSeatDoc(liveSnapshot.id, liveSnapshot.data(), seat.seatNumber);
-      if (liveSeat.status !== "pending" || !liveSeat.holdStartTimeMs) {
-        return;
+      const liveBooking = normalizeBookingDoc(liveBookingSnapshot.id, liveBookingSnapshot.data());
+      if (liveBooking.status !== BOOKING_STATUS_APPROVED) {
+        throw makeAppError("booking-not-approved", "Only approved bookings can be cancelled.");
+      }
+      if (!liveBooking.phaseId || !liveBooking.userId) {
+        throw makeAppError("invalid-booking", "Booking is missing userId or phaseId.");
       }
 
-      const stillExpired = Date.now() - liveSeat.holdStartTimeMs >= HOLD_DURATION_MS;
-      if (!stillExpired) {
-        return;
+      const canonicalPhaseRef = docFn(db, "phases", liveBooking.phaseId);
+      const legacyPhaseId = getLegacyPhaseIdForCanonical(liveBooking.phaseId);
+      const legacyPhaseRef = legacyPhaseId ? docFn(db, "phases", legacyPhaseId) : null;
+
+      const canonicalPhaseSnapshot = await transaction.get(canonicalPhaseRef);
+      let targetPhaseRef = canonicalPhaseRef;
+      let targetPhaseSnapshot = canonicalPhaseSnapshot;
+
+      if (!canonicalPhaseSnapshot.exists() && legacyPhaseRef) {
+        const legacyPhaseSnapshot = await transaction.get(legacyPhaseRef);
+        if (legacyPhaseSnapshot.exists()) {
+          targetPhaseRef = legacyPhaseRef;
+          targetPhaseSnapshot = legacyPhaseSnapshot;
+        }
       }
 
-      transaction.set(
-        seatRef,
-        buildAvailableSeatPayload(liveSeat.seatId, liveSeat.seatNumber),
-        { merge: true }
-      );
+      const livePhase = targetPhaseSnapshot.exists()
+        ? normalizePhaseDoc(targetPhaseSnapshot.id, targetPhaseSnapshot.data())
+        : normalizePhaseDoc(liveBooking.phaseId, buildCanonicalPhasePayload(liveBooking.phaseId));
+
+      const nextBookedSeats = Math.max((livePhase.bookedSeats || 0) - 1, 0);
+      const phasePayload = {
+        ...buildCanonicalPhasePayload(liveBooking.phaseId),
+        ...targetPhaseSnapshot.data(),
+        phaseId: liveBooking.phaseId,
+        bookedSeats: nextBookedSeats
+      };
+
+      const userRef = docFn(db, "users", liveBooking.userId);
+
+      transaction.update(bookingRef, {
+        status: BOOKING_STATUS_CANCELLED,
+        requestStatus: BOOKING_STATUS_CANCELLED,
+        bookingStatus: BOOKING_STATUS_CANCELLED,
+        updatedAt: serverTimestampFn(),
+        updatedAtMs: Date.now(),
+        cancelledAt: serverTimestampFn(),
+        cancelledBy: state.user?.uid || null
+      });
+      transaction.set(targetPhaseRef, phasePayload, { merge: true });
+      transaction.set(userRef, { unlockedPhases: arrayRemoveFn(liveBooking.phaseId) }, { merge: true });
     });
 
-    if (state.user && seat.heldBy === state.user.uid) {
-      showMessage("Your 15-minute hold expired. Seat is available again.", "info");
-    }
+    showMessage(`Booking ${booking.bookingId} cancelled and seat released.`, "success");
   } catch (error) {
-    // Keep silent for repeated timer checks to avoid UI spam.
-    // Snapshot updates remain source of truth for seat status.
-  } finally {
-    state.expiringSeatIds.delete(seat.seatId);
+    if (error?.code === "booking-not-approved") {
+      showMessage("Only approved bookings can be cancelled.", "error");
+    } else if (isPermissionDeniedError(error)) {
+      showMessage("Cancel action blocked by Firestore rules.", "error");
+    } else {
+      showMessage(`Failed to cancel booking: ${error.message}`, "error");
+    }
   }
 }
 
-function checkSeatExpiry() {
-  const now = Date.now();
-  let hasPendingSeats = false;
-
-  state.seats.forEach((seat) => {
-    if (seat.status !== "pending") {
-      return;
-    }
-
-    hasPendingSeats = true;
-    if (!seat.holdStartTimeMs) {
-      return;
-    }
-
-    if (now - seat.holdStartTimeMs >= HOLD_DURATION_MS) {
-      void expireSeatIfNeeded(seat);
-    }
-  });
-
-  if (hasPendingSeats) {
-    renderSeats();
-  } else {
-    syncSeatTimer();
-    renderAdminPanel();
-  }
-}
-
-function subscribeToSeats() {
-  if (!state.firebaseReady || !db || !collectionFn || !queryFn || !whereFn || !documentIdFn || !onSnapshotFn) {
+function maybePromptForContactDetails() {
+  if (!state.user || !state.profile) {
     return;
   }
 
-  if (state.seatsUnsubscribe) {
-    state.seatsUnsubscribe();
-    state.seatsUnsubscribe = null;
+  const needsContact = !state.profile.phoneNumber || !state.profile.whatsappNumber;
+  if (!needsContact) {
+    state.hasPromptedForContact = false;
+    return;
   }
 
-  const seatsCollection = collectionFn(db, "seats");
-  const seatsQuery = queryFn(
-    seatsCollection,
-    whereFn(documentIdFn(), "in", SEAT_DOC_IDS)
-  );
+  if (!elements.phoneModal.classList.contains("hidden")) {
+    return;
+  }
 
-  state.seatsUnsubscribe = onSnapshotFn(
-    seatsQuery,
+  if (state.pendingPhaseId !== null) {
+    showPhoneModal(state.pendingPhaseId);
+    return;
+  }
+
+  if (state.hasPromptedForContact) {
+    return;
+  }
+
+  state.hasPromptedForContact = true;
+  showMessage("Enter your phone and WhatsApp numbers to continue.", "info");
+  showPhoneModal();
+}
+
+function subscribeToPhases() {
+  if (!state.firebaseReady || !db || !collectionFn || !onSnapshotFn) {
+    return;
+  }
+
+  if (state.phasesUnsubscribe) {
+    state.phasesUnsubscribe();
+    state.phasesUnsubscribe = null;
+  }
+
+  const phasesCollection = collectionFn(db, "phases");
+  state.phasesUnsubscribe = onSnapshotFn(
+    phasesCollection,
     (snapshot) => {
-      const previousSeatsById = new Map(state.seats.map((seat) => [seat.seatId, seat]));
-      const seatsById = new Map();
-      snapshot.forEach((seatDoc) => {
-        seatsById.set(
-          seatDoc.id,
-          normalizeSeatDoc(seatDoc.id, seatDoc.data(), parseSeatNumberFromId(seatDoc.id))
-        );
+      const nextPhases = [];
+      snapshot.forEach((phaseDoc) => {
+        nextPhases.push(normalizePhaseDoc(phaseDoc.id, phaseDoc.data()));
       });
 
-      state.seats = SEAT_DOC_IDS.map((seatId, index) =>
-        seatsById.get(seatId) || normalizeSeatDoc(seatId, buildAvailableSeatPayload(seatId, index + 1), index + 1)
-      );
+      state.phases = mergeWithCanonicalPhases(nextPhases);
+      renderPhases();
 
-      announceNewPendingSeatEvents(previousSeatsById, state.seats);
-      renderSeats();
-      syncSeatTimer();
-
-      if (!state.hasLoadedSeats) {
-        state.hasLoadedSeats = true;
+      if (!state.hasLoadedPhases) {
+        state.hasLoadedPhases = true;
         if (snapshot.size === 0) {
-          showMessage("No seat docs found. Create seats/seat_001 ... seats/seat_010 in Firestore.", "error");
-        } else if (snapshot.size < SEAT_DOC_IDS.length) {
-          showMessage(`Loaded ${snapshot.size}/10 seat docs. Create missing seat_001 to seat_010 documents.`, "error");
+          showMessage('No Firestore phase docs found. Showing default 6-phase catalog.', "info");
+        } else if (snapshot.size < CANONICAL_PHASES.length) {
+          showMessage("Phase docs synced. Missing phases are filled from the default catalog.", "info");
         } else {
-          showMessage("Seats loaded from Firestore.", "success");
+          showMessage("Phases loaded from Firestore.", "success");
         }
       }
     },
     (error) => {
       if (isPermissionDeniedError(error)) {
-        showMessage("Seat read blocked by Firestore rules.", "error");
+        showMessage("Phase read blocked by Firestore rules.", "error");
       } else {
-        showMessage(`Failed to load seats: ${error.message}`, "error");
+        showMessage(`Failed to load phases: ${error.message}`, "error");
       }
     }
   );
 }
 
+function subscribeToUserBookings(userId) {
+  if (!state.firebaseReady || !db || !collectionFn || !queryFn || !whereFn || !onSnapshotFn) {
+    return;
+  }
+
+  if (state.userBookingsUnsubscribe) {
+    state.userBookingsUnsubscribe();
+    state.userBookingsUnsubscribe = null;
+  }
+
+  const bookingsQuery = queryFn(
+    collectionFn(db, "bookings"),
+    whereFn("userId", "==", userId)
+  );
+
+  state.userBookingsUnsubscribe = onSnapshotFn(
+    bookingsQuery,
+    (snapshot) => {
+      const nextBookingsByPhaseId = new Map();
+
+      snapshot.forEach((bookingDoc) => {
+        const normalized = normalizeBookingDoc(bookingDoc.id, bookingDoc.data());
+        if (normalized.phaseId) {
+          nextBookingsByPhaseId.set(normalized.phaseId, normalized);
+        }
+      });
+
+      state.userBookingsByPhaseId = nextBookingsByPhaseId;
+      renderPhases();
+    },
+    (error) => {
+      if (isPermissionDeniedError(error)) {
+        showMessage("Booking read blocked by Firestore rules.", "error");
+      } else {
+        showMessage(`Failed to load your bookings: ${error.message}`, "error");
+      }
+    }
+  );
+}
+
+function subscribeToUserProfile(user) {
+  if (!state.firebaseReady || !db || !docFn || !onSnapshotFn) {
+    return;
+  }
+
+  if (state.userDocUnsubscribe) {
+    state.userDocUnsubscribe();
+    state.userDocUnsubscribe = null;
+  }
+
+  const userRef = docFn(db, "users", user.uid);
+  state.userDocUnsubscribe = onSnapshotFn(
+    userRef,
+    (snapshot) => {
+      state.userDocExists = snapshot.exists();
+      state.profile = snapshot.exists()
+        ? normalizeUserProfile(user, snapshot.data())
+        : normalizeUserProfile(user, {});
+
+      updateProfileUI();
+      renderPhases();
+      maybePromptForContactDetails();
+    },
+    (error) => {
+      if (isPermissionDeniedError(error)) {
+        showMessage("Profile read blocked by Firestore rules. Allow users/{uid} read for that uid.", "error");
+      } else {
+        showMessage(`Failed to load profile: ${error.message}`, "error");
+      }
+    }
+  );
+}
+
+function subscribeToAdminPendingBookings() {
+  if (!state.isAdmin || !state.firebaseReady || !db || !collectionFn || !onSnapshotFn) {
+    return;
+  }
+
+  if (state.adminBookingsUnsubscribe) {
+    state.adminBookingsUnsubscribe();
+    state.adminBookingsUnsubscribe = null;
+  }
+
+  const bookingCollection = collectionFn(db, "bookings");
+  state.adminBookingsUnsubscribe = onSnapshotFn(
+    bookingCollection,
+    (snapshot) => {
+      const previousBookingsById = new Map(
+        state.adminPendingBookings.map((booking) => [booking.bookingId, booking])
+      );
+
+      const nextAllBookings = [];
+      const nextPendingBookings = [];
+      snapshot.forEach((bookingDoc) => {
+        const bookingData = bookingDoc.data();
+        const normalized = normalizeBookingDoc(bookingDoc.id, bookingData);
+        const rawStatus = normalizeString(bookingData?.status).toLowerCase();
+        nextAllBookings.push(normalized);
+        if (rawStatus === BOOKING_STATUS_PENDING && getEffectiveBookingStatus(normalized) === BOOKING_STATUS_PENDING) {
+          nextPendingBookings.push(normalized);
+        }
+      });
+
+      announceNewPendingBookingEvents(previousBookingsById, nextPendingBookings);
+
+      state.adminPendingBookings = nextPendingBookings;
+      state.adminAllBookings = nextAllBookings;
+      renderAdminPanel();
+
+      if (!state.hasLoadedAdminBookings) {
+        state.hasLoadedAdminBookings = true;
+        showMessage("Admin bookings synced.", "success");
+      }
+    },
+    (error) => {
+      if (isPermissionDeniedError(error)) {
+        showMessage("Admin booking read blocked by Firestore rules.", "error");
+      } else {
+        showMessage(`Failed to load admin bookings: ${error.message}`, "error");
+      }
+    }
+  );
+}
+
+function clearUserScopedListeners() {
+  if (state.userBookingsUnsubscribe) {
+    state.userBookingsUnsubscribe();
+    state.userBookingsUnsubscribe = null;
+  }
+
+  if (state.userDocUnsubscribe) {
+    state.userDocUnsubscribe();
+    state.userDocUnsubscribe = null;
+  }
+}
+
+function clearAdminListener() {
+  if (state.adminBookingsUnsubscribe) {
+    state.adminBookingsUnsubscribe();
+    state.adminBookingsUnsubscribe = null;
+  }
+}
+
 async function onAuthStateChangedHandler(user) {
+  clearUserScopedListeners();
+  clearAdminListener();
+
   state.user = user;
-  state.isAdmin = Boolean(user && user.email && user.email.toLowerCase() === ADMIN_EMAIL);
+  state.isAdmin = isAdminEmail(user?.email);
+  state.pendingPhaseId = null;
+  state.userBookingsByPhaseId = new Map();
+  state.userDocExists = false;
+  state.hasPromptedForContact = false;
+
   setSoundEngineAdminMode(state.isAdmin);
   if (!state.isAdmin) {
+    state.adminPendingBookings = [];
+    state.adminAllBookings = [];
+    state.hasLoadedAdminBookings = false;
+    state.selectedAdminTab = "pending";
     state.hasShownSoundUnlockHint = false;
     clearSoundAnnouncementHistory();
   }
+
   updateAuthButtons();
+  hidePhoneModal();
 
   if (!user) {
     state.profile = null;
     updateProfileUI();
-    hidePhoneModal();
-    renderSeats();
+    renderPhases();
+    renderAdminPanel();
     return;
   }
 
-  try {
-    await loadUserProfile(user);
+  subscribeToUserProfile(user);
+  subscribeToUserBookings(user.uid);
 
-    if (!state.profile.phone) {
-      showMessage("Enter your phone number to continue.", "info");
-      showPhoneModal();
-      renderSeats();
-      return;
-    }
-
-    await continuePendingSeatFlow();
-  } catch (error) {
-    if (isPermissionDeniedError(error)) {
-      showMessage("Profile read blocked by Firestore rules. Allow users/{uid} read for that uid.", "error");
-    } else {
-      showMessage(`Failed to load profile: ${error.message}`, "error");
-    }
-  } finally {
-    renderSeats();
+  if (state.isAdmin) {
+    showMessage(`Admin access enabled for ${normalizeEmail(user.email)}.`, "success");
+    renderAdminPanel();
+    subscribeToAdminPendingBookings();
+  } else {
+    showMessage(`Logged in as ${normalizeEmail(user.email)}.`, "success");
+    renderAdminPanel();
   }
+
+  renderPhases();
 }
 
-async function handleSeatClick(seatId) {
+async function handlePhaseClick(phaseId) {
   if (!state.firebaseReady) {
     showMessage("Firebase is not ready.", "error");
     return;
   }
 
-  const seat = getSeatById(seatId);
-  if (!seat) {
-    showMessage("Seat not found.", "error");
+  const canonicalPhaseId = canonicalizePhaseId(phaseId);
+  const phase = getPhaseById(canonicalPhaseId);
+  if (!phase) {
+    showMessage("Phase not found.", "error");
     return;
   }
 
-  if (seat.status !== "available") {
-    const isMine = Boolean(state.user && seat.heldBy === state.user.uid);
-    if (isMine && seat.status === "pending") {
-      showMessage("This is your pending seat.", "info");
-    } else if (isMine && seat.status === "confirmed") {
-      showMessage("This is your confirmed seat.", "info");
-    } else if (seat.status === "pending") {
-      showMessage("Seat is currently pending.", "error");
+  const unlockedPhaseSet = getUnlockedPhaseSet();
+  const missingPrerequisitePhase = getMissingPrerequisitePhase(canonicalPhaseId, unlockedPhaseSet);
+  if (missingPrerequisitePhase) {
+    showMessage(`Complete ${missingPrerequisitePhase.title} first.`, "info");
+    return;
+  }
+
+  if (isPhaseFull(phase)) {
+    showMessage("No seats available for this phase.", "error");
+    return;
+  }
+
+  const { phaseState } = resolvePhaseState(canonicalPhaseId, unlockedPhaseSet);
+  if (phaseState !== PHASE_STATE_LOCKED) {
+    if (phaseState === PHASE_STATE_PENDING) {
+      showMessage("This phase is already pending approval.", "info");
     } else {
-      showMessage("Seat is confirmed and unavailable.", "error");
+      showMessage("This phase is already unlocked.", "info");
     }
     return;
   }
-
-  state.pendingSeatId = seatId;
 
   if (!state.user) {
     showMessage("Please log in first.", "error");
@@ -1042,35 +1793,43 @@ async function handleSeatClick(seatId) {
     return;
   }
 
-  if (!state.profile || !state.profile.phone) {
-    showMessage("Enter your phone number.", "info");
-    showPhoneModal();
-    return;
-  }
-
-  await continuePendingSeatFlow();
+  showPhoneModal(canonicalPhaseId);
 }
 
 async function handlePhoneSubmit(event) {
   event.preventDefault();
 
-  const phoneValue = elements.phoneInput.value.trim();
-  if (!phoneValue) {
-    showMessage("Phone number is required.", "error");
+  const phoneNumber = elements.phoneNumberInput.value.trim();
+  const whatsappNumber = elements.whatsappInput.value.trim();
+
+  if (!phoneNumber || !whatsappNumber) {
+    showMessage("Phone and WhatsApp numbers are required.", "error");
     return;
   }
 
-  if (!isValidPhone(phoneValue)) {
-    showMessage("Please enter a valid phone number.", "error");
+  if (!isValidPhone(phoneNumber) || !isValidPhone(whatsappNumber)) {
+    showMessage("Please enter valid phone numbers.", "error");
     return;
   }
+
+  const requestedPhaseId = state.pendingPhaseId;
+  state.pendingPhaseId = null;
 
   try {
-    await saveUserProfile(phoneValue);
+    await saveUserProfile(phoneNumber, whatsappNumber);
     hidePhoneModal();
+
+    if (requestedPhaseId) {
+      await requestBookingForPhase(requestedPhaseId, phoneNumber, whatsappNumber);
+      return;
+    }
+
     showMessage("Profile saved.", "success");
-    await continuePendingSeatFlow();
   } catch (error) {
+    if (requestedPhaseId) {
+      state.pendingPhaseId = requestedPhaseId;
+    }
+
     if (isPermissionDeniedError(error)) {
       showMessage("Profile save blocked by Firestore rules. Allow users/{uid} write for that uid.", "error");
     } else {
@@ -1114,7 +1873,40 @@ function bindEvents() {
   });
   elements.phoneCancelBtn.addEventListener("click", () => {
     registerSoundEngineUserInteraction();
+    state.pendingPhaseId = null;
     hidePhoneModal();
+  });
+  if (elements.adminChip) {
+    elements.adminChip.addEventListener("click", () => {
+      registerSoundEngineUserInteraction();
+      if (!state.isAdmin) {
+        return;
+      }
+      elements.adminPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+  elements.phaseFilterButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      registerSoundEngineUserInteraction();
+      const nextTrack = button.dataset.phaseFilter;
+      if (!nextTrack || nextTrack === state.selectedPhaseTrack) {
+        return;
+      }
+      state.selectedPhaseTrack = nextTrack;
+      renderPhases();
+    });
+  });
+
+  elements.adminTabButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      registerSoundEngineUserInteraction();
+      const nextTab = button.dataset.adminTab;
+      if (!nextTab || nextTab === state.selectedAdminTab) {
+        return;
+      }
+      state.selectedAdminTab = nextTab;
+      renderAdminPanel();
+    });
   });
 
   if (elements.speechTestBtn) {
@@ -1146,6 +1938,7 @@ async function setupFirebase() {
     auth = authSdk.getAuth(firebaseApp);
     db = firestoreSdk.getFirestore(firebaseApp);
     provider = new authSdk.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: "select_account" });
 
     onAuthStateChangedFn = authSdk.onAuthStateChanged;
     signInWithPopupFn = authSdk.signInWithPopup;
@@ -1154,13 +1947,14 @@ async function setupFirebase() {
     collectionFn = firestoreSdk.collection;
     queryFn = firestoreSdk.query;
     whereFn = firestoreSdk.where;
-    documentIdFn = firestoreSdk.documentId;
     onSnapshotFn = firestoreSdk.onSnapshot;
     runTransactionFn = firestoreSdk.runTransaction;
     docFn = firestoreSdk.doc;
-    getDocFn = firestoreSdk.getDoc;
     setDocFn = firestoreSdk.setDoc;
     serverTimestampFn = firestoreSdk.serverTimestamp;
+    arrayUnionFn = firestoreSdk.arrayUnion;
+    arrayRemoveFn = firestoreSdk.arrayRemove;
+    timestampClass = firestoreSdk.Timestamp;
 
     state.firebaseReady = true;
     return true;
@@ -1172,13 +1966,12 @@ async function setupFirebase() {
 }
 
 function cleanup() {
-  if (state.seatsUnsubscribe) {
-    state.seatsUnsubscribe();
-    state.seatsUnsubscribe = null;
-  }
-  if (state.timerIntervalId) {
-    clearInterval(state.timerIntervalId);
-    state.timerIntervalId = null;
+  clearUserScopedListeners();
+  clearAdminListener();
+
+  if (state.phasesUnsubscribe) {
+    state.phasesUnsubscribe();
+    state.phasesUnsubscribe = null;
   }
 }
 
@@ -1189,10 +1982,10 @@ async function initializeApp() {
     language: "en-US"
   });
 
-  state.seats = createFallbackSeats();
-  renderSeats();
+  renderPhases();
+  renderAdminPanel();
   bindEvents();
-  showMessage("Loading seats from Firestore...", "info");
+  showMessage("Loading phases from Firestore...", "info");
   applyBrowserEnvironmentGuard();
   updateAuthButtons();
 
@@ -1204,7 +1997,7 @@ async function initializeApp() {
     return;
   }
 
-  subscribeToSeats();
+  subscribeToPhases();
 
   if (auth && onAuthStateChangedFn) {
     onAuthStateChangedFn(auth, (user) => {
