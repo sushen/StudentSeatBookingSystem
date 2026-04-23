@@ -125,6 +125,8 @@ let provider = null;
 
 let onAuthStateChangedFn = null;
 let signInWithPopupFn = null;
+let signInWithRedirectFn = null;
+let getRedirectResultFn = null;
 let signOutFn = null;
 
 let collectionFn = null;
@@ -351,8 +353,20 @@ function getLoginErrorMessage(error) {
   if (code === "auth/popup-blocked") {
     return "Login blocked by the browser. Allow popups for this site and try again.";
   }
+  if (code === "auth/operation-not-allowed") {
+    return "Google sign-in is disabled in Firebase Authentication. Enable Google provider and try again.";
+  }
+  if (code === "auth/operation-not-supported-in-this-environment" || code === "auth/web-storage-unsupported") {
+    return "This browser environment does not support Google login storage. Open this page in a full browser.";
+  }
+  if (code === "auth/network-request-failed") {
+    return "Network error during login. Check internet connection and try again.";
+  }
   if (loweredMessage.includes("disallowed_useragent")) {
     return "Google sign-in is blocked inside this in-app browser. Open this page in Chrome or Safari.";
+  }
+  if (loweredMessage.includes("third-party") && loweredMessage.includes("cookie")) {
+    return "Google login failed because third-party cookies/storage are blocked. Allow cookies or use a standard browser profile.";
   }
   if (message) {
     return `Login failed: ${message}`;
@@ -1033,15 +1047,50 @@ async function handleLogin() {
     return;
   }
 
-  if (!state.firebaseReady || !auth || !provider || !signInWithPopupFn) {
+  const canPopupLogin = Boolean(signInWithPopupFn);
+  const canRedirectLogin = Boolean(signInWithRedirectFn);
+
+  if (!state.firebaseReady || !auth || !provider || (!canPopupLogin && !canRedirectLogin)) {
     showMessage("Firebase is not ready. Check config and reload.", "error");
     return;
   }
 
   try {
+    if (!canPopupLogin && canRedirectLogin) {
+      hideLoginModal();
+      showMessage("Redirecting to Google sign-in...", "info");
+      await signInWithRedirectFn(auth, provider);
+      return;
+    }
+
     await signInWithPopupFn(auth, provider);
     hideLoginModal();
     showMessage("Login successful.", "success");
+  } catch (error) {
+    const code = String(error?.code || "");
+    if (code === "auth/popup-blocked" && canRedirectLogin) {
+      try {
+        hideLoginModal();
+        showMessage("Popup blocked. Redirecting to Google sign-in...", "info");
+        await signInWithRedirectFn(auth, provider);
+        return;
+      } catch (redirectError) {
+        showMessage(getLoginErrorMessage(redirectError), "error");
+        return;
+      }
+    }
+
+    showMessage(getLoginErrorMessage(error), "error");
+  }
+}
+
+async function processRedirectLoginResult() {
+  if (!state.firebaseReady || !auth || !getRedirectResultFn) {
+    return;
+  }
+
+  try {
+    await getRedirectResultFn(auth);
   } catch (error) {
     showMessage(getLoginErrorMessage(error), "error");
   }
@@ -1942,6 +1991,8 @@ async function setupFirebase() {
 
     onAuthStateChangedFn = authSdk.onAuthStateChanged;
     signInWithPopupFn = authSdk.signInWithPopup;
+    signInWithRedirectFn = authSdk.signInWithRedirect;
+    getRedirectResultFn = authSdk.getRedirectResult;
     signOutFn = authSdk.signOut;
 
     collectionFn = firestoreSdk.collection;
@@ -2004,6 +2055,8 @@ async function initializeApp() {
       void onAuthStateChangedHandler(user);
     });
   }
+
+  await processRedirectLoginResult();
 }
 
 window.addEventListener("beforeunload", cleanup);
