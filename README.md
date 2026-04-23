@@ -1,10 +1,10 @@
 # Shapla Chottor AI Research Lab (Web)
 
-This web app now follows the same phase + booking model as the mobile app.
+This web app uses the same phase + booking contract as the Android app.
 
 ## Canonical Phase Catalog
 
-The app always shows a fixed 6-phase journey (with Firestore override support):
+The UI always supports this 6-phase flow (Firestore `phases` can override details):
 
 1. `phase1` - Foundations (Beginner)
 2. `phase2` - Data Analysis (Beginner)
@@ -13,15 +13,41 @@ The app always shows a fixed 6-phase journey (with Firestore override support):
 5. `phase5` - Simulation & Data Systems (Advanced)
 6. `phase6` - Production Engineering (Advanced)
 
-If Firestore `phases` is empty or missing items, the web app uses this default catalog automatically.
-
 ## Firestore Collections
 
 - `users`
 - `phases`
 - `bookings`
 
-### `bookings/{userId}_{phaseId}`
+## Android Compatibility Contract
+
+Web-created booking docs are written to:
+
+- collection: `bookings`
+- document id: `bookingId = "${userId}_${phaseId}"`
+
+Required primary fields (must exist and be correct):
+
+- `bookingId`
+- `userId`
+- `phaseId`
+- `phoneNumber`
+- `whatsappNumber`
+- `createdAt`
+- `expiresAt`
+- `status`
+
+Status values are lowercase only:
+
+- `pending`
+- `approved`
+- `rejected`
+- `cancelled`
+- `expired`
+
+New web booking writes `status: "pending"`.
+
+## Booking Document Shape (`bookings/{userId}_{phaseId}`)
 
 ```json
 {
@@ -30,8 +56,8 @@ If Firestore `phases` is empty or missing items, the web app uses this default c
   "userId": "uid",
   "uid": "uid",
   "phaseId": "phase1",
-  "phase": "phase1",
-  "phaseKey": "phase1",
+  "phase": "phase_1",
+  "phaseKey": "phase_1",
   "phaseCanonicalId": "phase1",
   "phaseLegacyId": "phase_1",
   "phaseIdAliases": ["phase1", "phase_1"],
@@ -47,54 +73,55 @@ If Firestore `phases` is empty or missing items, the web app uses this default c
   "requestStatus": "pending",
   "bookingStatus": "pending",
   "createdAtMs": 1713600000000,
-  "createdAt": "timestamp",
+  "createdAt": 1713600000000,
   "updatedAtMs": 1713600000000,
-  "updatedAt": "timestamp",
+  "updatedAt": 1713600000000,
   "source": "web",
-  "expiresAt": "timestamp"
+  "expiresAtMs": 1713600900000,
+  "expiresAt": 1713600900000
 }
 ```
 
-Supported booking statuses:
+Notes:
 
-- `pending`
-- `approved`
-- `rejected`
-- `cancelled`
-- `expired`
-
-Compatibility note:
-
-- The web app writes both canonical and legacy-compatible fields (`status/requestStatus/bookingStatus`, `userId/uid`, `phaseId/phase`) so older mobile parsers can still read pending bookings.
+- `phaseId` is canonical (`phase1`, not `phase_1`).
+- Alias fields are still written for backward compatibility (`id`, `uid`, `phase`, `phaseKey`, `requestStatus`, `bookingStatus`).
+- Web admin pending view is intentionally aligned with Android behavior: pending means `status == "pending"` (and not expired by local effective-status check).
 
 ## User Booking Behavior
 
-- Google login is required for booking.
-- A phase can be booked only when:
-  - previous phase is unlocked (progressive path lock),
-  - seats are available,
-  - there is no active pending/approved booking for that phase.
-- If a pending booking expires, the user can request again.
-- UI uses Beginner / Intermediate / Advanced tabs, like the mobile view.
+- Google login is required.
+- User must provide `phoneNumber` and `whatsappNumber`.
+- Booking is allowed only when:
+  - previous phase prerequisite is satisfied,
+  - phase has available seats,
+  - no active pending/approved booking exists for that phase.
+- Pending booking window is 15 minutes (`createdAt` + 15 min).
 
 ## Admin Behavior
 
-Admin email: `sushen.biswas.aga@gmail.com`
+Admin email in web app:
 
-Admin panel has two tabs:
+- `sushen.biswas.aga@gmail.com`
 
-- `Pending`: approve or reject new requests.
-- `All Bookings`: view all statuses and cancel approved seats.
+Admin tabs:
+
+- `Pending`: approve/reject pending requests
+- `All Bookings`: inspect all statuses and cancel approved bookings
 
 Actions:
 
 - **Approve**
-  - booking -> `approved`
+  - booking `status` -> `approved`
   - phase `bookedSeats` +1
   - user `unlockedPhases` `arrayUnion(phaseId)`
 - **Reject**
-  - booking -> `rejected`
+  - booking `status` -> `rejected`
 - **Cancel Seat**
-  - booking -> `cancelled`
-  - phase `bookedSeats` -1 (never below 0)
+  - booking `status` -> `cancelled`
+  - phase `bookedSeats` -1 (not below 0)
   - user `unlockedPhases` `arrayRemove(phaseId)`
+
+## Privacy Policy
+
+- [`PRIVACY_POLICY.md`](./PRIVACY_POLICY.md)

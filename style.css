@@ -461,6 +461,22 @@ button.secondary:hover:enabled {
   font-weight: 600;
 }
 
+.legal-footer {
+  margin-top: 18px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.legal-link {
+  color: #1d4ed8;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.legal-link:hover {
+  text-decoration: underline;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
