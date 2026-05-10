@@ -7,6 +7,7 @@
   <link rel="icon" type="image/svg+xml" href="./lotus_logo.svg" />
   <link rel="shortcut icon" href="./lotus_logo.svg" />
   <link rel="stylesheet" href="./style.css" />
+  <script src="https://unpkg.com/lucide@latest"></script>
   <!-- Meta Pixel Code -->
   <script>
     !function(f, b, e, v, n, t, s) {
@@ -40,82 +41,356 @@
       alt=""
     />
   </noscript>
+
   <main class="page">
-    <section class="card">
-      <header class="header">
-        <div class="brand">
-          <img src="./lotus_logo.svg" alt="Shapla Chottor logo" class="brand-logo" />
-          <div class="brand-text">
-            <h1 class="brand-title">Shapla Chottor</h1>
-            <p class="brand-subtitle">Ai Research Lab</p>
+    <div class="app-status-strip" aria-hidden="true"></div>
+
+    <section id="authLanding" class="auth-landing">
+      <div class="auth-grid">
+        <article class="auth-hero" aria-hidden="true">
+          <img src="./Image/ShaplaChottor.png" alt="" class="auth-hero-logo" />
+          <p class="auth-hero-kicker">Shapla Chottor Lab</p>
+          <h1 class="auth-hero-title">Build AI Skills Through Structured Learning</h1>
+          <p class="auth-hero-copy">
+            Progress through guided phases, unlock practical systems, and join a research-driven community.
+          </p>
+          <div class="auth-hero-stats">
+            <div>
+              <p>06</p>
+              <span>Learning Phases</span>
+            </div>
+            <div>
+              <p>15m</p>
+              <span>Booking Window</span>
+            </div>
+            <div>
+              <p>100+</p>
+              <span>Seat Capacity</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="auth-panel">
+          <div class="auth-brand-wrap">
+            <img src="./Image/ShaplaChottor.png" alt="Shapla Chottor logo" class="auth-logo" />
+            <h2 class="auth-title">Shapla Chottor Lab</h2>
+            <p class="auth-subtitle">Learn. Build. Code with AI.</p>
+          </div>
+
+          <div class="auth-form">
+            <input id="referralCodeInput" type="text" placeholder="Referral Code (Optional)" />
+            <button id="forgotPasswordBtn" type="button" class="auth-link-btn">Forgot Password?</button>
+            <button id="loginBtn" type="button" class="google-signin-btn">Sign in with Google</button>
+            <p class="auth-register-text">Don't have an account? <span>Register</span></p>
+            <p class="auth-version-text">Version 1.0.9<br />Branch: v-0.0.7-debug</p>
+          </div>
+
+          <button id="logoutBtn" type="button" class="secondary hidden">Logout</button>
+        </article>
+      </div>
+    </section>
+
+    <section id="appShell" class="app-shell hidden">
+      <aside class="workspace-sidebar">
+        <div class="sidebar-brand">
+          <img src="./Image/ShaplaChottor.png" alt="Shapla Chottor logo" class="sidebar-logo" />
+          <div>
+            <p class="sidebar-brand-name">Shapla Chottor Lab</p>
+            <p class="sidebar-brand-subtitle">Learning Workspace</p>
           </div>
         </div>
-        <div class="auth-actions">
-          <button id="loginBtn" type="button">Login with Google</button>
-          <button id="logoutBtn" type="button" class="secondary">Logout</button>
+
+        <nav id="workspaceNav" class="workspace-nav">
+          <button type="button" class="workspace-nav-btn active" data-nav-section="home">
+            <span class="nav-icon" aria-hidden="true"><i data-lucide="house"></i></span>
+            <span>Home</span>
+          </button>
+          <button type="button" class="workspace-nav-btn" data-nav-section="overview">
+            <span class="nav-icon" aria-hidden="true"><i data-lucide="book-open"></i></span>
+            <span>Courses</span>
+          </button>
+          <button type="button" class="workspace-nav-btn" data-nav-section="learning">
+            <span class="nav-icon" aria-hidden="true"><i data-lucide="graduation-cap"></i></span>
+            <span>My Learning</span>
+          </button>
+          <button type="button" class="workspace-nav-btn" data-nav-section="features">
+            <span class="nav-icon" aria-hidden="true"><i data-lucide="sparkles"></i></span>
+            <span>Advanced</span>
+          </button>
+          <button type="button" class="workspace-nav-btn" data-nav-section="profile">
+            <span class="nav-icon" aria-hidden="true"><i data-lucide="user-round"></i></span>
+            <span>Profile</span>
+          </button>
+          <button type="button" class="workspace-nav-btn hidden" data-nav-section="admin" data-nav-admin-only="true">
+            <span class="nav-icon" aria-hidden="true"><i data-lucide="shield-check"></i></span>
+            <span>Admin</span>
+          </button>
+        </nav>
+
+        <div class="sidebar-footnote">
+          Structured progression with seat-governed access and guided milestones.
         </div>
-      </header>
+      </aside>
 
-      <section id="profileCard" class="profile-card hidden">
-        <div class="profile-card-header">
-          <h2>Profile</h2>
-          <button id="adminChip" type="button" class="admin-chip hidden">Admin</button>
+      <div class="app-main">
+        <header class="app-topbar">
+          <div>
+            <p class="app-topbar-kicker">Research Lab Platform</p>
+            <h2>Progressive Learning Console</h2>
+            <div class="app-topbar-context">
+              <span id="topbarSectionLabel" class="topbar-chip">Home</span>
+              <span id="topbarProgressLabel" class="topbar-chip soft">Progress 0%</span>
+              <span id="topbarBookingLabel" class="topbar-chip subtle">No active bookings</span>
+            </div>
+          </div>
+          <img src="./Image/Tablt 10.png" alt="Researcher emblem" class="app-topbar-avatar" />
+        </header>
+
+        <div class="app-content">
+          <section id="homePanel" class="screen-section">
+            <header class="screen-header home-header">
+              <div>
+                <h2>Welcome back, <span id="homeWelcomeName">Researcher</span>!</h2>
+                <p>Build momentum and continue your AI learning roadmap.</p>
+              </div>
+              <img src="./Image/Tablt 10.png" alt="Profile emblem" class="home-header-logo" />
+            </header>
+
+            <section class="home-metrics" aria-label="Learning dashboard metrics">
+              <article class="home-metric-card">
+                <span class="home-metric-icon" aria-hidden="true"><i data-lucide="lock-open"></i></span>
+                <p id="homeUnlockedPhasesCount">0</p>
+                <span>Unlocked Phases</span>
+              </article>
+              <article class="home-metric-card">
+                <span class="home-metric-icon" aria-hidden="true"><i data-lucide="badge-check"></i></span>
+                <p id="homeCompletedPhasesCount">0</p>
+                <span>Completed Phases</span>
+              </article>
+              <article class="home-metric-card">
+                <span class="home-metric-icon" aria-hidden="true"><i data-lucide="clock-3"></i></span>
+                <p id="homePendingRequestsCount">0</p>
+                <span>Pending Requests</span>
+              </article>
+            </section>
+
+            <section class="home-progress-card">
+              <p class="home-progress-label">Your Progress</p>
+              <p id="homeProgressPercent" class="home-progress-value">0%</p>
+              <div class="home-progress-track" aria-hidden="true">
+                <div id="homeProgressBarFill" class="home-progress-fill"></div>
+              </div>
+            </section>
+
+            <button id="homeStartLearningBtn" type="button" class="home-cta-btn">Start Learning</button>
+
+            <section class="home-continue-wrap">
+              <h3>Continue Learning</h3>
+              <button id="homeContinueBtn" type="button" class="home-continue-card">
+                <div class="home-continue-icon" aria-hidden="true"><i data-lucide="book-open-check"></i></div>
+                <div class="home-continue-copy">
+                  <p id="homeContinueTitle">0 of 4 lessons complete</p>
+                  <p id="homeContinueSubtitle">Phase 1: Foundations</p>
+                </div>
+                <span class="home-continue-play" aria-hidden="true"><i data-lucide="arrow-right"></i></span>
+              </button>
+            </section>
+          </section>
+
+          <section id="overviewPanel" class="screen-section hidden">
+            <section class="learning-summary-card">
+              <h2>Learning Phases</h2>
+              <p>Track mastery, seat access, and readiness by phase.</p>
+              <hr />
+              <p id="learningSummaryTrack">Current Track: Beginner</p>
+              <p id="learningSummaryPhase">Active Phase: Foundations (0%)</p>
+              <p id="learningSummaryOverall">Overall Learning: 0% - 0/6 phases complete</p>
+            </section>
+
+            <section class="phase-track-tabs" aria-label="Phase tracks">
+              <button type="button" class="track-tab active" data-phase-filter="beginner">Beginner</button>
+              <button type="button" class="track-tab" data-phase-filter="intermediate">Intermediate</button>
+              <button type="button" class="track-tab" data-phase-filter="advanced">Advanced</button>
+            </section>
+
+            <div id="phaseList" class="phase-list" aria-label="Phase list"></div>
+
+            <div class="speech-test-wrap hidden">
+              <button id="speechTestBtn" type="button" class="secondary">Test Voice Alert</button>
+            </div>
+          </section>
+
+          <section id="learningPanel" class="screen-section hidden">
+            <header class="screen-header">
+              <h2>My Learning</h2>
+              <p>Monitor mastery, completion pace, and current learning focus.</p>
+            </header>
+
+            <section class="learning-overall-card">
+              <div class="learning-overall-head">
+                <p>Overall Progress</p>
+                <p id="learningProgressText" class="learning-progress-value">0%</p>
+              </div>
+              <div class="learning-progress-bar" aria-hidden="true">
+                <div id="learningProgressBarFill" class="learning-progress-bar-fill"></div>
+              </div>
+            </section>
+
+            <section class="learning-current-wrap">
+              <h3>Current Phase</h3>
+              <article class="learning-current-card">
+                <h4 id="learningCurrentPhaseTitle">Phase 1: Foundations</h4>
+                <p id="learningCurrentPhaseDescription">
+                  Learn core programming fundamentals required for all future phases.
+                </p>
+                <div class="learning-current-progress-head">
+                  <p>Current Phase Progress</p>
+                  <p id="learningCurrentPhaseProgressValue">0%</p>
+                </div>
+                <div class="learning-progress-bar" aria-hidden="true">
+                  <div id="learningCurrentPhaseProgressFill" class="learning-progress-bar-fill"></div>
+                </div>
+                <p id="learningCurrentPhaseLessonCount" class="learning-current-lesson-count">0 of 4 lessons complete</p>
+                <button id="learningContinueBtn" type="button">Continue Learning</button>
+              </article>
+            </section>
+          </section>
+
+          <section id="classroomPanel" class="screen-section hidden">
+            <header class="screen-header classroom-header">
+              <button id="classroomBackBtn" type="button" class="icon-btn" aria-label="Go back">&lt;</button>
+              <h2>Classroom</h2>
+            </header>
+
+            <section class="classroom-phase-card">
+              <h3 id="classroomPhaseTitle">Foundations</h3>
+              <p class="classroom-phase-progress-label">Current Phase Progress</p>
+              <div class="learning-progress-bar" aria-hidden="true">
+                <div id="classroomProgressBarFill" class="learning-progress-bar-fill"></div>
+              </div>
+              <div class="classroom-phase-progress-row">
+                <p id="classroomLessonCountText">0 of 4 lessons complete</p>
+                <p id="classroomProgressText">0%</p>
+              </div>
+            </section>
+
+            <div id="learningPhaseTabs" class="learning-phase-tabs" role="tablist" aria-label="Learning phases"></div>
+            <div id="lessonList" class="lesson-list"></div>
+            <section id="lessonDetail" class="lesson-detail hidden" aria-live="polite">
+              <h3 id="lessonTitle">Lesson</h3>
+              <div class="lesson-block">
+                <h4>Concept</h4>
+                <p id="lessonConcept"></p>
+              </div>
+              <div class="lesson-block">
+                <h4>Example</h4>
+                <p id="lessonExample"></p>
+              </div>
+              <div class="lesson-block">
+                <h4>Exercise</h4>
+                <p id="lessonExercise"></p>
+              </div>
+              <div class="lesson-block">
+                <h4>Reflection</h4>
+                <p id="lessonReflectionPrompt"></p>
+                <textarea id="lessonReflectionInput" rows="4" placeholder="Write your reflection before completing this lesson..."></textarea>
+              </div>
+              <div class="lesson-detail-actions">
+                <button id="completeLessonBtn" type="button">Complete Lesson</button>
+              </div>
+            </section>
+            <p id="lessonEmpty" class="learning-empty hidden">Log in to continue your classroom journey.</p>
+          </section>
+
+          <section id="featureGatePanel" class="screen-section hidden">
+            <header class="screen-header">
+              <h2>Practical Implementation</h2>
+              <p>Hands-on tools and practical applications unlocked as you master each phase.</p>
+            </header>
+            <div id="featureGateList" class="feature-gate-list"></div>
+          </section>
+
+          <section id="profilePanel" class="screen-section hidden">
+            <header class="screen-header">
+              <h2>Researcher Profile</h2>
+              <p>Account, learning outcomes, and participation summary.</p>
+            </header>
+
+            <section id="profileCard" class="profile-card hidden">
+              <img src="./Image/Tablt 10.png" alt="Researcher avatar" class="profile-avatar" />
+              <h3 id="profileName">-</h3>
+              <p id="profileEmail">-</p>
+              <button id="adminChip" type="button" class="admin-chip hidden">Admin</button>
+              <div class="profile-meta-list">
+                <p>Phone: <span id="profilePhoneNumber">-</span></p>
+                <p>WhatsApp: <span id="profileWhatsapp">-</span></p>
+              </div>
+              <div class="profile-referral-wrap">
+                <p>Your Referral Code</p>
+                <p id="profileReferralCode">------</p>
+              </div>
+              <button id="profileInviteBtn" type="button" class="profile-invite-btn">Invite Researchers</button>
+              <div class="profile-stats-row">
+                <div>
+                  <p id="profileInviteCount">0</p>
+                  <span>Invites</span>
+                </div>
+                <div>
+                  <p id="profileConversionCount">0</p>
+                  <span>Conversions</span>
+                </div>
+              </div>
+            </section>
+
+            <section class="profile-settings-wrap">
+              <h3>Account Settings</h3>
+              <button id="editProfileBtn" type="button" class="profile-setting-row">
+                <span>Personal Information</span>
+                <span>&gt;</span>
+              </button>
+              <button type="button" class="profile-setting-row">
+                <span>Notifications</span>
+                <span>&gt;</span>
+              </button>
+              <button id="deleteAccountBtn" type="button" class="profile-signout danger-link">Delete Account</button>
+              <button id="profileSignOutBtn" type="button" class="profile-signout">Sign Out of the Lab</button>
+            </section>
+
+            <footer class="legal-footer">
+              <a class="legal-link" href="./PRIVACY_POLICY.md" target="_blank" rel="noopener">Privacy Policy</a>
+            </footer>
+          </section>
+
+          <section id="adminPanel" class="admin-panel hidden">
+            <h2>Admin Panel</h2>
+            <div class="admin-tabs" role="tablist" aria-label="Admin booking tabs">
+              <button type="button" class="admin-tab active" data-admin-tab="pending">Pending</button>
+              <button type="button" class="admin-tab" data-admin-tab="all">All Bookings</button>
+            </div>
+            <div class="admin-table-wrap">
+              <table class="admin-table">
+                <thead>
+                  <tr>
+                    <th>User ID</th>
+                    <th>Phase ID</th>
+                    <th>Phone</th>
+                    <th>WhatsApp</th>
+                    <th>Created</th>
+                    <th>Expires</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="adminRows"></tbody>
+              </table>
+            </div>
+            <p id="adminEmpty" class="admin-empty">No pending bookings right now.</p>
+          </section>
         </div>
-        <p><strong>Name:</strong> <span id="profileName">-</span></p>
-        <p><strong>Email:</strong> <span id="profileEmail">-</span></p>
-        <p><strong>Phone:</strong> <span id="profilePhoneNumber">-</span></p>
-        <p><strong>WhatsApp:</strong> <span id="profileWhatsapp">-</span></p>
-      </section>
-
-      <section class="legend">
-        <span><span class="dot locked"></span>Locked</span>
-        <span><span class="dot pending"></span>Pending</span>
-        <span><span class="dot unlocked"></span>Unlocked</span>
-      </section>
-
-      <section class="phase-track-tabs" aria-label="Phase tracks">
-        <button type="button" class="track-tab active" data-phase-filter="beginner">Beginner</button>
-        <button type="button" class="track-tab" data-phase-filter="intermediate">Intermediate</button>
-        <button type="button" class="track-tab" data-phase-filter="advanced">Advanced</button>
-      </section>
-
-      <div id="phaseList" class="phase-list" aria-label="Phase list"></div>
-
-      <p id="messageBox" class="message info">Loading phases from Firestore...</p>
-      <div class="speech-test-wrap">
-        <button id="speechTestBtn" type="button" class="secondary">Test Voice Alert</button>
       </div>
-
-      <section id="adminPanel" class="admin-panel hidden">
-        <h2>Admin Panel</h2>
-        <div class="admin-tabs" role="tablist" aria-label="Admin booking tabs">
-          <button type="button" class="admin-tab active" data-admin-tab="pending">Pending</button>
-          <button type="button" class="admin-tab" data-admin-tab="all">All Bookings</button>
-        </div>
-        <div class="admin-table-wrap">
-          <table class="admin-table">
-            <thead>
-              <tr>
-                <th>User ID</th>
-                <th>Phase ID</th>
-                <th>Phone</th>
-                <th>WhatsApp</th>
-                <th>Created</th>
-                <th>Expires</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody id="adminRows"></tbody>
-          </table>
-        </div>
-        <p id="adminEmpty" class="admin-empty">No pending bookings right now.</p>
-      </section>
-
-      <footer class="legal-footer">
-        <a class="legal-link" href="./PRIVACY_POLICY.md" target="_blank" rel="noopener">Privacy Policy</a>
-      </footer>
     </section>
+
+    <p id="messageBox" class="message info hidden">Loading phases from Firestore...</p>
   </main>
 
   <!-- Login Modal -->
@@ -163,13 +438,26 @@
     <div class="modal-card">
       <h2 id="phoneTitle">Enter your contact details</h2>
       <form id="phoneForm" class="phone-form">
-        <label for="phoneNumberInput">Phone Number</label>
-        <input id="phoneNumberInput" type="tel" placeholder="+880123456789" required />
         <label for="whatsappInput">WhatsApp Number</label>
         <input id="whatsappInput" type="tel" placeholder="+880123456789" required />
         <div class="modal-actions">
           <button id="phoneSubmitBtn" type="submit">Save Profile</button>
           <button id="phoneCancelBtn" type="button" class="secondary">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div id="deleteAccountModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="deleteAccountTitle">
+    <div class="modal-card">
+      <h2 id="deleteAccountTitle">Permanent Account Deletion</h2>
+      <p>This action permanently removes your profile, booking history, progress records, referral data, affiliate data, and login account.</p>
+      <p>Type <strong>DELETE</strong> to continue.</p>
+      <form id="deleteAccountForm" class="phone-form">
+        <input id="deleteAccountConfirmInput" type="text" placeholder="DELETE" required />
+        <div class="modal-actions">
+          <button id="deleteAccountConfirmBtn" type="submit" class="danger">Delete Permanently</button>
+          <button id="deleteAccountCancelBtn" type="button" class="secondary">Cancel</button>
         </div>
       </form>
     </div>

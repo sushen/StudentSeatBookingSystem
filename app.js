@@ -12,6 +12,18 @@ import {
   speakNotificationOnce
 } from "./sound-engine/soundEngine.js";
 import { findNewPendingBookingEvents } from "./sound-engine/bookingNotificationUtils.js";
+import {
+  getLessonById,
+  getLessonCatalogPhaseIds,
+  getLessonCountForPhase,
+  getLessonsForPhase
+} from "./learning/lessonCatalog.js";
+import {
+  computeFeatureUnlocks,
+  isLessonUnlocked,
+  normalizeLessonIdArray,
+  toProgressPercent
+} from "./learning/progression.js";
 
 // TODO: Replace with your Firebase web app config if needed.
 // Firebase Console -> Project Settings -> General -> Your apps -> SDK setup and configuration
@@ -30,8 +42,11 @@ const ADMIN_EMAIL_ALIASES = new Set([
   "sushen.biswas.aga@googlemail.com"
 ]);
 const BOOKING_EXPIRY_MS = 15 * 60 * 1000;
+const FUNCTIONS_REGION = "asia-south1";
+const DELETE_ACCOUNT_CONFIRM_TOKEN = "DELETE";
 
 const BOOKING_STATUS_PENDING = "pending";
+const BOOKING_STATUS_REVIEWING = "reviewing";
 const BOOKING_STATUS_APPROVED = "approved";
 const BOOKING_STATUS_REJECTED = "rejected";
 const BOOKING_STATUS_CANCELLED = "cancelled";
@@ -122,6 +137,7 @@ const CANONICAL_TO_LEGACY_PHASE_ID_MAP = new Map(
 let auth = null;
 let db = null;
 let provider = null;
+let functionsService = null;
 
 let onAuthStateChangedFn = null;
 let signInWithPopupFn = null;
@@ -140,19 +156,79 @@ let serverTimestampFn = null;
 let arrayUnionFn = null;
 let arrayRemoveFn = null;
 let timestampClass = null;
+let httpsCallableFn = null;
+let bookingUiTicker = null;
 
 const elements = {
+  authLanding: document.getElementById("authLanding"),
+  appShell: document.getElementById("appShell"),
+  workspaceNav: document.getElementById("workspaceNav"),
+  workspaceNavButtons: Array.from(document.querySelectorAll("[data-nav-section]")),
+  topbarSectionLabel: document.getElementById("topbarSectionLabel"),
+  topbarProgressLabel: document.getElementById("topbarProgressLabel"),
+  topbarBookingLabel: document.getElementById("topbarBookingLabel"),
+  homePanel: document.getElementById("homePanel"),
+  homeWelcomeName: document.getElementById("homeWelcomeName"),
+  homeUnlockedPhasesCount: document.getElementById("homeUnlockedPhasesCount"),
+  homeCompletedPhasesCount: document.getElementById("homeCompletedPhasesCount"),
+  homePendingRequestsCount: document.getElementById("homePendingRequestsCount"),
+  homeProgressPercent: document.getElementById("homeProgressPercent"),
+  homeProgressBarFill: document.getElementById("homeProgressBarFill"),
+  homeContinueTitle: document.getElementById("homeContinueTitle"),
+  homeContinueSubtitle: document.getElementById("homeContinueSubtitle"),
+  homeStartLearningBtn: document.getElementById("homeStartLearningBtn"),
+  homeContinueBtn: document.getElementById("homeContinueBtn"),
+  overviewPanel: document.getElementById("overviewPanel"),
+  learningSummaryTrack: document.getElementById("learningSummaryTrack"),
+  learningSummaryPhase: document.getElementById("learningSummaryPhase"),
+  learningSummaryOverall: document.getElementById("learningSummaryOverall"),
   phaseFilterButtons: Array.from(document.querySelectorAll("[data-phase-filter]")),
   phaseList: document.getElementById("phaseList"),
   messageBox: document.getElementById("messageBox"),
   loginBtn: document.getElementById("loginBtn"),
   logoutBtn: document.getElementById("logoutBtn"),
+  profilePanel: document.getElementById("profilePanel"),
   profileCard: document.getElementById("profileCard"),
   profileName: document.getElementById("profileName"),
   profileEmail: document.getElementById("profileEmail"),
   profilePhoneNumber: document.getElementById("profilePhoneNumber"),
   profileWhatsapp: document.getElementById("profileWhatsapp"),
+  profileReferralCode: document.getElementById("profileReferralCode"),
+  profileInviteCount: document.getElementById("profileInviteCount"),
+  profileConversionCount: document.getElementById("profileConversionCount"),
+  profileInviteBtn: document.getElementById("profileInviteBtn"),
+  profileSignOutBtn: document.getElementById("profileSignOutBtn"),
+  editProfileBtn: document.getElementById("editProfileBtn"),
+  deleteAccountBtn: document.getElementById("deleteAccountBtn"),
   adminChip: document.getElementById("adminChip"),
+  learningPanel: document.getElementById("learningPanel"),
+  learningProgressText: document.getElementById("learningProgressText"),
+  learningProgressBarFill: document.getElementById("learningProgressBarFill"),
+  learningCurrentPhaseTitle: document.getElementById("learningCurrentPhaseTitle"),
+  learningCurrentPhaseDescription: document.getElementById("learningCurrentPhaseDescription"),
+  learningCurrentPhaseProgressValue: document.getElementById("learningCurrentPhaseProgressValue"),
+  learningCurrentPhaseProgressFill: document.getElementById("learningCurrentPhaseProgressFill"),
+  learningCurrentPhaseLessonCount: document.getElementById("learningCurrentPhaseLessonCount"),
+  learningContinueBtn: document.getElementById("learningContinueBtn"),
+  classroomPanel: document.getElementById("classroomPanel"),
+  classroomBackBtn: document.getElementById("classroomBackBtn"),
+  classroomPhaseTitle: document.getElementById("classroomPhaseTitle"),
+  classroomProgressBarFill: document.getElementById("classroomProgressBarFill"),
+  classroomProgressText: document.getElementById("classroomProgressText"),
+  classroomLessonCountText: document.getElementById("classroomLessonCountText"),
+  learningPhaseTabs: document.getElementById("learningPhaseTabs"),
+  lessonList: document.getElementById("lessonList"),
+  lessonDetail: document.getElementById("lessonDetail"),
+  lessonTitle: document.getElementById("lessonTitle"),
+  lessonConcept: document.getElementById("lessonConcept"),
+  lessonExample: document.getElementById("lessonExample"),
+  lessonExercise: document.getElementById("lessonExercise"),
+  lessonReflectionPrompt: document.getElementById("lessonReflectionPrompt"),
+  lessonReflectionInput: document.getElementById("lessonReflectionInput"),
+  completeLessonBtn: document.getElementById("completeLessonBtn"),
+  lessonEmpty: document.getElementById("lessonEmpty"),
+  featureGatePanel: document.getElementById("featureGatePanel"),
+  featureGateList: document.getElementById("featureGateList"),
   loginModal: document.getElementById("loginModal"),
   loginModalBtn: document.getElementById("loginModalBtn"),
   loginModalCloseBtn: document.getElementById("loginModalCloseBtn"),
@@ -166,7 +242,6 @@ const elements = {
   phoneModal: document.getElementById("phoneModal"),
   phoneTitle: document.getElementById("phoneTitle"),
   phoneForm: document.getElementById("phoneForm"),
-  phoneNumberInput: document.getElementById("phoneNumberInput"),
   whatsappInput: document.getElementById("whatsappInput"),
   phoneSubmitBtn: document.getElementById("phoneSubmitBtn"),
   phoneCancelBtn: document.getElementById("phoneCancelBtn"),
@@ -174,7 +249,12 @@ const elements = {
   adminPanel: document.getElementById("adminPanel"),
   adminTabButtons: Array.from(document.querySelectorAll("[data-admin-tab]")),
   adminRows: document.getElementById("adminRows"),
-  adminEmpty: document.getElementById("adminEmpty")
+  adminEmpty: document.getElementById("adminEmpty"),
+  deleteAccountModal: document.getElementById("deleteAccountModal"),
+  deleteAccountForm: document.getElementById("deleteAccountForm"),
+  deleteAccountConfirmInput: document.getElementById("deleteAccountConfirmInput"),
+  deleteAccountConfirmBtn: document.getElementById("deleteAccountConfirmBtn"),
+  deleteAccountCancelBtn: document.getElementById("deleteAccountCancelBtn")
 };
 
 const state = {
@@ -188,6 +268,13 @@ const state = {
   adminPendingBookings: [],
   adminAllBookings: [],
   selectedAdminTab: "pending",
+  selectedNavSection: "home",
+  classroomReturnSection: "overview",
+  selectedLearningPhaseId: "phase1",
+  selectedLessonId: "",
+  learningProgressByPhaseId: new Map(),
+  learningProgressUnsubscribe: null,
+  callablesReady: false,
   firebaseReady: false,
   phasesUnsubscribe: null,
   userBookingsUnsubscribe: null,
@@ -201,9 +288,38 @@ const state = {
   browserEnvironment: detectInAppBrowserEnvironment()
 };
 
+let messageHideTimer = null;
+
 function showMessage(text, type = "info") {
+  if (!elements.messageBox) {
+    return;
+  }
+  if (messageHideTimer) {
+    clearTimeout(messageHideTimer);
+    messageHideTimer = null;
+  }
   elements.messageBox.textContent = text;
   elements.messageBox.className = `message ${type}`;
+  if (!text) {
+    elements.messageBox.classList.add("hidden");
+    return;
+  }
+  elements.messageBox.classList.remove("hidden");
+  if (type !== "error") {
+    messageHideTimer = window.setTimeout(() => {
+      elements.messageBox.classList.add("hidden");
+    }, 3500);
+  }
+}
+
+function refreshLucideIcons() {
+  try {
+    if (window.lucide && typeof window.lucide.createIcons === "function") {
+      window.lucide.createIcons();
+    }
+  } catch (error) {
+    void error;
+  }
 }
 
 function isGoogleLoginBlockedInCurrentBrowser() {
@@ -380,6 +496,16 @@ function makeAppError(code, message) {
   return error;
 }
 
+async function callBackendFunction(name, data = {}) {
+  if (!state.callablesReady || !httpsCallableFn || !functionsService) {
+    throw makeAppError("functions-unavailable", "Cloud Functions are not initialized.");
+  }
+
+  const fn = httpsCallableFn(functionsService, name);
+  const response = await fn(data);
+  return response?.data || null;
+}
+
 function timestampToMillis(value) {
   if (!value) {
     return null;
@@ -460,6 +586,14 @@ function toTrackName(rawLevel) {
     return lowered;
   }
   return PHASE_TRACK_BEGINNER;
+}
+
+function toTitleCase(value) {
+  const normalized = normalizeString(value);
+  if (!normalized) {
+    return "";
+  }
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1).toLowerCase();
 }
 
 function getCanonicalPhaseById(phaseId) {
@@ -553,6 +687,7 @@ function normalizePhaseDoc(docId, data = {}) {
 function normalizeBookingStatus(value) {
   if (
     value === BOOKING_STATUS_PENDING ||
+    value === BOOKING_STATUS_REVIEWING ||
     value === BOOKING_STATUS_APPROVED ||
     value === BOOKING_STATUS_REJECTED ||
     value === BOOKING_STATUS_CANCELLED ||
@@ -593,6 +728,29 @@ function normalizeBookingDoc(docId, data = {}) {
   };
 }
 
+function normalizeLearningProgressDoc(docId, data = {}) {
+  const phaseId = canonicalizePhaseId(data.phaseId || docId);
+  const completedLessonIds = normalizeLessonIdArray(
+    Array.isArray(data.completedLessonIds) ? data.completedLessonIds : data.completedLessons
+  );
+  const reflections = typeof data.reflections === "object" && data.reflections !== null
+    ? { ...data.reflections }
+    : {};
+  const lessonCount = getLessonCountForPhase(phaseId);
+  const progressPercent = typeof data.progressPercent === "number"
+    ? Math.max(0, Math.min(100, data.progressPercent))
+    : toProgressPercent(completedLessonIds.length, lessonCount);
+
+  return {
+    phaseId,
+    completedLessonIds,
+    completedLessonSet: new Set(completedLessonIds),
+    reflections,
+    progressPercent,
+    updatedAtMs: timestampToMillis(data.updatedAt)
+  };
+}
+
 function sortPhaseList(phases) {
   return phases.slice().sort((a, b) => {
     if (a.order !== b.order) {
@@ -611,6 +769,68 @@ function formatDateTime(ms) {
     return "";
   }
   return new Date(ms).toLocaleString();
+}
+
+function formatRemainingWindow(durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return "0m";
+  }
+
+  const totalMinutes = Math.ceil(durationMs / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours <= 0) {
+    return `${minutes}m`;
+  }
+  if (minutes === 0) {
+    return `${hours}h`;
+  }
+  return `${hours}h ${minutes}m`;
+}
+
+function buildPhaseLifecycleElement(phase, phaseState, booking) {
+  const lifecycle = document.createElement("div");
+  lifecycle.className = "phase-lifecycle";
+
+  const effectiveStatus = getEffectiveBookingStatus(booking);
+  const isTerminalStatus =
+    effectiveStatus === BOOKING_STATUS_REJECTED ||
+    effectiveStatus === BOOKING_STATUS_CANCELLED ||
+    effectiveStatus === BOOKING_STATUS_EXPIRED;
+
+  let activeIndex = -1;
+  if (phaseState === PHASE_STATE_UNLOCKED || effectiveStatus === BOOKING_STATUS_APPROVED || phase.phaseId === "phase1") {
+    activeIndex = 2;
+  } else if (effectiveStatus === BOOKING_STATUS_REVIEWING) {
+    activeIndex = 1;
+  } else if (effectiveStatus === BOOKING_STATUS_PENDING) {
+    activeIndex = 0;
+  }
+
+  const steps = [
+    "Requested",
+    "Reviewing",
+    "Approved"
+  ];
+
+  steps.forEach((label, index) => {
+    const step = document.createElement("span");
+    step.className = "phase-lifecycle-step";
+    step.textContent = label;
+    if (index <= activeIndex) {
+      step.classList.add("done");
+    }
+    if (index === activeIndex) {
+      step.classList.add("current");
+    }
+    if (isTerminalStatus) {
+      step.classList.add("muted");
+    }
+    lifecycle.appendChild(step);
+  });
+
+  return lifecycle;
 }
 
 function getPhaseById(phaseId) {
@@ -646,6 +866,9 @@ function getMissingPrerequisitePhase(phaseId, unlockedPhaseSet) {
 }
 
 function getBookingStatusLabel(status) {
+  if (status === BOOKING_STATUS_REVIEWING) {
+    return "reviewing";
+  }
   if (status === BOOKING_STATUS_APPROVED) {
     return "approved";
   }
@@ -667,7 +890,7 @@ function getEffectiveBookingStatus(booking) {
   }
 
   if (
-    booking.status === BOOKING_STATUS_PENDING &&
+    (booking.status === BOOKING_STATUS_PENDING || booking.status === BOOKING_STATUS_REVIEWING) &&
     booking.expiresAtMs &&
     booking.expiresAtMs <= Date.now()
   ) {
@@ -689,14 +912,48 @@ function getUnlockedPhaseSet() {
   return unlockedSet;
 }
 
+function getCompletedPhaseSet() {
+  const completedSet = new Set((state.profile?.completedPhases || []).map(canonicalizePhaseId));
+  state.learningProgressByPhaseId.forEach((progress, phaseId) => {
+    if (progress.progressPercent >= 100) {
+      completedSet.add(canonicalizePhaseId(phaseId));
+    }
+  });
+  return completedSet;
+}
+
+function getMissingCompletionPrerequisitePhase(phaseId, completedPhaseSet) {
+  const previousPhase = getPreviousPhase(phaseId);
+  if (!previousPhase) {
+    return null;
+  }
+  if (completedPhaseSet.has(previousPhase.phaseId)) {
+    return null;
+  }
+  return previousPhase;
+}
+
+function isPhaseClassroomAccessible(phaseId, unlockedPhaseSet) {
+  const canonicalPhaseId = canonicalizePhaseId(phaseId);
+  if (canonicalPhaseId === "phase1") {
+    return true;
+  }
+  return unlockedPhaseSet.has(canonicalPhaseId);
+}
+
 function resolvePhaseState(phaseId, unlockedPhaseSet) {
+  const canonicalPhaseId = canonicalizePhaseId(phaseId);
+  if (canonicalPhaseId === "phase1") {
+    return { phaseState: PHASE_STATE_UNLOCKED, booking: null };
+  }
+
   const booking = state.userBookingsByPhaseId.get(phaseId) || null;
   const effectiveStatus = getEffectiveBookingStatus(booking);
 
   if (unlockedPhaseSet.has(phaseId) || booking?.status === BOOKING_STATUS_APPROVED) {
     return { phaseState: PHASE_STATE_UNLOCKED, booking };
   }
-  if (effectiveStatus === BOOKING_STATUS_PENDING) {
+  if (effectiveStatus === BOOKING_STATUS_PENDING || effectiveStatus === BOOKING_STATUS_REVIEWING) {
     return { phaseState: PHASE_STATE_PENDING, booking };
   }
   if (effectiveStatus === BOOKING_STATUS_EXPIRED) {
@@ -706,17 +963,31 @@ function resolvePhaseState(phaseId, unlockedPhaseSet) {
 }
 
 function buildPhaseStatusText(phase, phaseState, booking, missingPrerequisitePhase) {
+  if (phase.phaseId === "phase1") {
+    return state.user
+      ? "Teacher approved this classroom. You can enter now."
+      : "Login to open the classroom.";
+  }
   if (phaseState === PHASE_STATE_UNLOCKED) {
     return "Approved and unlocked.";
   }
   if (phaseState === PHASE_STATE_PENDING) {
-    if (booking?.expiresAtMs) {
-      return `Waiting for approval. Expires: ${formatDateTime(booking.expiresAtMs)}.`;
+    const remainingMs = Number(booking?.expiresAtMs || 0) - Date.now();
+    const remainingText = formatRemainingWindow(remainingMs);
+
+    if (booking?.status === BOOKING_STATUS_REVIEWING) {
+      if (booking?.expiresAtMs && remainingMs > 0) {
+        return `Under teacher review. Approval window: ${remainingText} remaining.`;
+      }
+      return "Your request is under teacher review.";
+    }
+    if (booking?.expiresAtMs && remainingMs > 0) {
+      return `Waiting for approval. Booking window: ${remainingText} remaining.`;
     }
     return "Waiting for admin approval.";
   }
   if (missingPrerequisitePhase) {
-    return `Complete ${missingPrerequisitePhase.title} before requesting this phase.`;
+    return `Complete ${missingPrerequisitePhase.title} lessons before requesting this phase.`;
   }
   if (isPhaseFull(phase)) {
     return "No seats available for this phase right now.";
@@ -734,6 +1005,10 @@ function buildPhaseStatusText(phase, phaseState, booking, missingPrerequisitePha
 }
 
 function renderPhases() {
+  if (!elements.phaseList) {
+    return;
+  }
+
   elements.phaseList.innerHTML = "";
   elements.phaseFilterButtons.forEach((button) => {
     button.classList.toggle("active", button.dataset.phaseFilter === state.selectedPhaseTrack);
@@ -749,8 +1024,25 @@ function renderPhases() {
   }
 
   const unlockedPhaseSet = getUnlockedPhaseSet();
+  const completedPhaseSet = getCompletedPhaseSet();
   const selectedTrack = state.selectedPhaseTrack || PHASE_TRACK_BEGINNER;
   const visiblePhases = sortedPhases.filter((phase) => toTrackName(phase.level) === selectedTrack);
+  const summaryPhase = visiblePhases[0] || sortedPhases[0];
+  const summaryProgress = summaryPhase ? getPhaseLearningProgress(summaryPhase.phaseId).progressPercent : 0;
+  const completedCount = Array.from(completedPhaseSet.values()).filter(Boolean).length;
+  const overallProgress = computeOverallProgressFromMap();
+
+  if (elements.learningSummaryTrack) {
+    elements.learningSummaryTrack.textContent = `Current Track: ${toTitleCase(selectedTrack)}`;
+  }
+  if (elements.learningSummaryPhase) {
+    elements.learningSummaryPhase.textContent = summaryPhase
+      ? `Active Phase: ${summaryPhase.title} (${summaryProgress}%)`
+      : "Active Phase: -";
+  }
+  if (elements.learningSummaryOverall) {
+    elements.learningSummaryOverall.textContent = `Overall Learning: ${overallProgress}% - ${completedCount}/${CANONICAL_PHASES.length} phases complete`;
+  }
 
   if (visiblePhases.length === 0) {
     const emptyState = document.createElement("p");
@@ -762,8 +1054,8 @@ function renderPhases() {
 
   visiblePhases.forEach((phase) => {
     const { phaseState, booking } = resolvePhaseState(phase.phaseId, unlockedPhaseSet);
-    const missingPrerequisitePhase = getMissingPrerequisitePhase(phase.phaseId, unlockedPhaseSet);
-    const phaseIsFull = isPhaseFull(phase);
+    const missingPrerequisitePhase = getMissingCompletionPrerequisitePhase(phase.phaseId, completedPhaseSet);
+    const phaseIsFull = phase.phaseId === "phase1" ? false : isPhaseFull(phase);
 
     const card = document.createElement("article");
     card.className = "phase-card";
@@ -773,6 +1065,11 @@ function renderPhases() {
     header.className = "phase-card-header";
 
     const titleWrap = document.createElement("div");
+    titleWrap.className = "phase-title-wrap";
+
+    const phaseIndex = document.createElement("p");
+    phaseIndex.className = "phase-index";
+    phaseIndex.textContent = `Phase ${phase.order}`;
 
     const title = document.createElement("h3");
     title.className = "phase-title";
@@ -782,72 +1079,861 @@ function renderPhases() {
     subtitle.className = "phase-subtitle";
     subtitle.textContent = `Level: ${phase.level}`;
 
+    titleWrap.appendChild(phaseIndex);
     titleWrap.appendChild(title);
     titleWrap.appendChild(subtitle);
 
     const stateBadge = document.createElement("span");
-    stateBadge.className = `phase-state ${phaseState.toLowerCase()}`;
-    stateBadge.textContent = phaseState;
+    stateBadge.className = "phase-state";
+    if (phaseState === PHASE_STATE_UNLOCKED) {
+      stateBadge.classList.add("unlocked");
+      stateBadge.textContent = "APPROVED";
+    } else if (phaseState === PHASE_STATE_PENDING) {
+      if (booking?.status === BOOKING_STATUS_REVIEWING) {
+        stateBadge.classList.add("reviewing");
+        stateBadge.textContent = "REVIEWING";
+      } else {
+        stateBadge.classList.add("pending");
+        stateBadge.textContent = "PENDING";
+      }
+    } else {
+      stateBadge.classList.add("locked");
+      stateBadge.textContent = "LOCKED";
+    }
 
     header.appendChild(titleWrap);
     header.appendChild(stateBadge);
-
-    const meta = document.createElement("p");
-    meta.className = "phase-meta";
-    const availableSeats = Math.max(phase.totalSeats - phase.bookedSeats, 0);
-    meta.textContent = `Seats available: ${availableSeats} / ${phase.totalSeats}`;
 
     const description = document.createElement("p");
     description.className = "phase-description";
     description.textContent = phase.description || "No description.";
 
+    const meta = document.createElement("p");
+    meta.className = "phase-meta";
+    if (phase.phaseId === "phase1") {
+      meta.textContent = "Open classroom access";
+    } else {
+      const availableSeats = Math.max(phase.totalSeats - phase.bookedSeats, 0);
+      meta.textContent = `Seats available: ${availableSeats} / ${phase.totalSeats}`;
+    }
+
     const statusText = document.createElement("p");
     statusText.className = "phase-status-text";
     statusText.textContent = buildPhaseStatusText(phase, phaseState, booking, missingPrerequisitePhase);
+
+    const lifecycle = buildPhaseLifecycleElement(phase, phaseState, booking);
 
     const actionButton = document.createElement("button");
     actionButton.type = "button";
     actionButton.className = "phase-action-btn";
 
     if (phaseState === PHASE_STATE_LOCKED) {
-      if (missingPrerequisitePhase) {
+      if (missingPrerequisitePhase || phaseIsFull) {
         actionButton.disabled = true;
-        actionButton.textContent = "Locked by Progress";
-      } else if (phaseIsFull) {
-        actionButton.disabled = true;
-        actionButton.textContent = "No Seats Available";
+        actionButton.textContent = phaseIsFull ? "No Seats Available" : "Locked";
       } else {
         actionButton.disabled = false;
-        if (!state.user) {
-          actionButton.textContent = "Login to Book Seat";
-        } else if (
-          booking?.status === BOOKING_STATUS_EXPIRED ||
-          booking?.status === BOOKING_STATUS_REJECTED ||
-          booking?.status === BOOKING_STATUS_CANCELLED
-        ) {
-          actionButton.textContent = "Request Again";
-        } else {
-          actionButton.textContent = "Book Seat";
-        }
+        actionButton.textContent = !state.user
+          ? "Login to Book Seat"
+          : booking?.status === BOOKING_STATUS_EXPIRED ||
+              booking?.status === BOOKING_STATUS_REJECTED ||
+              booking?.status === BOOKING_STATUS_CANCELLED
+            ? "Request Again"
+            : "Book Seat";
         actionButton.addEventListener("click", () => {
           void handlePhaseClick(phase.phaseId);
         });
       }
     } else if (phaseState === PHASE_STATE_PENDING) {
       actionButton.disabled = true;
-      actionButton.textContent = "Waiting Approval";
+      actionButton.textContent = booking?.status === BOOKING_STATUS_REVIEWING ? "Under Review" : "Waiting Approval";
     } else {
-      actionButton.disabled = true;
-      actionButton.textContent = "Unlocked";
+      actionButton.disabled = false;
+      actionButton.textContent = "Enter Classroom";
+      actionButton.addEventListener("click", () => {
+        navigateToClassroom(phase.phaseId, "overview");
+      });
     }
 
     card.appendChild(header);
-    card.appendChild(meta);
     card.appendChild(description);
+    card.appendChild(meta);
     card.appendChild(statusText);
+    card.appendChild(lifecycle);
     card.appendChild(actionButton);
     elements.phaseList.appendChild(card);
   });
+}
+
+function getPhaseLearningProgress(phaseId) {
+  const canonicalPhaseId = canonicalizePhaseId(phaseId);
+  const existing = state.learningProgressByPhaseId.get(canonicalPhaseId);
+  if (existing) {
+    return existing;
+  }
+  return normalizeLearningProgressDoc(canonicalPhaseId, { phaseId: canonicalPhaseId });
+}
+
+function computeOverallProgressFromMap(progressByPhaseId = state.learningProgressByPhaseId) {
+  const phaseIds = getLessonCatalogPhaseIds();
+  let totalLessons = 0;
+  let completedLessons = 0;
+
+  phaseIds.forEach((phaseId) => {
+    const lessonCount = getLessonCountForPhase(phaseId);
+    totalLessons += lessonCount;
+
+    const progress = progressByPhaseId.get(phaseId) || getPhaseLearningProgress(phaseId);
+    completedLessons += progress.completedLessonIds.length;
+  });
+
+  return toProgressPercent(completedLessons, totalLessons);
+}
+
+function getLearningAccessInfo(phaseId, unlockedPhaseSet, completedPhaseSet) {
+  const canonicalPhaseId = canonicalizePhaseId(phaseId);
+  if (!state.user) {
+    return { accessible: false, reason: "Login required." };
+  }
+  if (canonicalPhaseId === "phase1") {
+    return { accessible: true, reason: "" };
+  }
+
+  const missingPrerequisitePhase = getMissingCompletionPrerequisitePhase(canonicalPhaseId, completedPhaseSet);
+  if (missingPrerequisitePhase) {
+    return { accessible: false, reason: `Complete ${missingPrerequisitePhase.title} first.` };
+  }
+
+  if (!isPhaseClassroomAccessible(canonicalPhaseId, unlockedPhaseSet)) {
+    return { accessible: false, reason: "Wait for teacher approval for this phase." };
+  }
+
+  return { accessible: true, reason: "" };
+}
+
+function getNextOpenLessonId(phaseId, lessons, completedLessonSet) {
+  for (const lesson of lessons) {
+    if (!completedLessonSet.has(lesson.lessonId)) {
+      return lesson.lessonId;
+    }
+  }
+  return lessons[lessons.length - 1]?.lessonId || "";
+}
+
+function ensureSelectedLearningPhase(unlockedPhaseSet, completedPhaseSet) {
+  const catalogPhaseIds = getLessonCatalogPhaseIds();
+  const selectedPhaseId = canonicalizePhaseId(state.selectedLearningPhaseId || "phase1");
+  if (catalogPhaseIds.includes(selectedPhaseId)) {
+    return selectedPhaseId;
+  }
+
+  const firstAccessiblePhase = catalogPhaseIds.find((phaseId) => {
+    const access = getLearningAccessInfo(phaseId, unlockedPhaseSet, completedPhaseSet);
+    return access.accessible;
+  });
+
+  state.selectedLearningPhaseId = firstAccessiblePhase || "phase1";
+  return state.selectedLearningPhaseId;
+}
+
+function renderLearningPhaseTabs(unlockedPhaseSet, completedPhaseSet) {
+  if (!elements.learningPhaseTabs) {
+    return;
+  }
+
+  elements.learningPhaseTabs.innerHTML = "";
+  const catalogPhaseIds = getLessonCatalogPhaseIds();
+
+  catalogPhaseIds.forEach((phaseId) => {
+    const phase = getPhaseById(phaseId) || { title: phaseId };
+    const access = getLearningAccessInfo(phaseId, unlockedPhaseSet, completedPhaseSet);
+    const progress = getPhaseLearningProgress(phaseId);
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "learning-phase-tab";
+    button.classList.toggle("active", canonicalizePhaseId(state.selectedLearningPhaseId) === phaseId);
+    button.classList.toggle("locked", !access.accessible);
+    button.disabled = !access.accessible;
+    button.textContent = `${phase.title} (${progress.progressPercent}%)`;
+    button.addEventListener("click", () => {
+      selectLearningPhase(phaseId, false);
+    });
+    elements.learningPhaseTabs.appendChild(button);
+  });
+}
+
+function renderLessonListForPhase(phaseId, accessInfo) {
+  if (!elements.lessonList) {
+    return;
+  }
+
+  elements.lessonList.innerHTML = "";
+  const lessons = getLessonsForPhase(phaseId);
+  const progress = getPhaseLearningProgress(phaseId);
+  const completedSet = progress.completedLessonSet;
+  const completedCount = progress.completedLessonIds.length;
+
+  if (!accessInfo.accessible) {
+    const p = document.createElement("p");
+    p.className = "learning-empty";
+    p.textContent = accessInfo.reason;
+    elements.lessonList.appendChild(p);
+    return;
+  }
+
+  lessons.forEach((lesson, lessonIndex) => {
+    const row = document.createElement("article");
+    row.className = "lesson-item";
+
+    const isCompleted = completedSet.has(lesson.lessonId);
+    const unlockedForAttempt = isLessonUnlocked(lessonIndex, completedCount);
+    const canOpen = isCompleted || unlockedForAttempt;
+    row.classList.toggle("completed", isCompleted);
+    row.classList.toggle("current", !isCompleted && unlockedForAttempt);
+    row.classList.toggle("locked", !canOpen);
+
+    const icon = document.createElement("span");
+    icon.className = "lesson-item-icon";
+    icon.textContent = isCompleted ? "v" : unlockedForAttempt ? ">" : "x";
+
+    const left = document.createElement("div");
+    const title = document.createElement("p");
+    title.className = "lesson-item-title";
+    title.textContent = lesson.title;
+    const subtitle = document.createElement("p");
+    subtitle.className = "lesson-item-subtitle";
+    subtitle.textContent = "Blocks: Concept - Example - Exercise - Reflection";
+    left.appendChild(title);
+    left.appendChild(subtitle);
+    subtitle.textContent = `Step ${lessonIndex + 1} of ${lessons.length}`;
+
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "lesson-item-btn";
+    button.disabled = !canOpen;
+    button.textContent = isCompleted ? "v" : "";
+    button.addEventListener("click", () => {
+      if (!canOpen) {
+        return;
+      }
+      state.selectedLessonId = lesson.lessonId;
+      renderClassroomPanel();
+    });
+
+    row.appendChild(icon);
+    row.appendChild(left);
+    row.appendChild(button);
+    if (canOpen) {
+      row.addEventListener("click", () => {
+        state.selectedLessonId = lesson.lessonId;
+        renderClassroomPanel();
+      });
+    }
+    elements.lessonList.appendChild(row);
+  });
+}
+
+function renderLessonDetailForPhase(phaseId, accessInfo) {
+  if (!elements.lessonDetail || !elements.lessonEmpty) {
+    return;
+  }
+
+  if (!accessInfo.accessible) {
+    elements.lessonDetail.classList.add("hidden");
+    elements.lessonEmpty.classList.remove("hidden");
+    elements.lessonEmpty.textContent = accessInfo.reason;
+    return;
+  }
+
+  const lessons = getLessonsForPhase(phaseId);
+  if (lessons.length === 0) {
+    elements.lessonDetail.classList.add("hidden");
+    elements.lessonEmpty.classList.remove("hidden");
+    elements.lessonEmpty.textContent = "No lessons configured for this phase.";
+    return;
+  }
+
+  const progress = getPhaseLearningProgress(phaseId);
+  const completedSet = progress.completedLessonSet;
+  const completedCount = progress.completedLessonIds.length;
+
+  if (!state.selectedLessonId) {
+    elements.lessonDetail.classList.add("hidden");
+    elements.lessonEmpty.classList.remove("hidden");
+    elements.lessonEmpty.textContent = "Select a lesson to open details.";
+    return;
+  }
+
+  const selectedLesson = getLessonById(phaseId, state.selectedLessonId) || lessons[0];
+  state.selectedLessonId = selectedLesson.lessonId;
+
+  const selectedIndex = lessons.findIndex((lesson) => lesson.lessonId === selectedLesson.lessonId);
+  const canOpen = completedSet.has(selectedLesson.lessonId) || isLessonUnlocked(selectedIndex, completedCount);
+
+  if (!canOpen) {
+    elements.lessonDetail.classList.add("hidden");
+    elements.lessonEmpty.classList.remove("hidden");
+    elements.lessonEmpty.textContent = "Finish previous lessons to unlock this one.";
+    return;
+  }
+
+  elements.lessonTitle.textContent = selectedLesson.title;
+  elements.lessonConcept.textContent = selectedLesson.blocks.concept;
+  elements.lessonExample.textContent = selectedLesson.blocks.example;
+  elements.lessonExercise.textContent = selectedLesson.blocks.exercise;
+  elements.lessonReflectionPrompt.textContent = selectedLesson.blocks.reflection;
+  elements.lessonReflectionInput.value = progress.reflections?.[selectedLesson.lessonId] || "";
+
+  elements.completeLessonBtn.disabled = completedSet.has(selectedLesson.lessonId);
+  elements.completeLessonBtn.textContent = completedSet.has(selectedLesson.lessonId)
+    ? "Lesson Completed"
+    : "Complete Lesson";
+
+  elements.lessonDetail.classList.remove("hidden");
+  elements.lessonEmpty.classList.add("hidden");
+}
+
+function renderHomePanel() {
+  if (!elements.homePanel || !state.user) {
+    return;
+  }
+
+  const unlockedPhaseSet = getUnlockedPhaseSet();
+  const completedPhaseSet = getCompletedPhaseSet();
+  const selectedPhaseId = ensureSelectedLearningPhase(unlockedPhaseSet, completedPhaseSet);
+  const selectedPhase = getPhaseById(selectedPhaseId) || { title: "Foundations", order: 1 };
+  const phaseProgress = getPhaseLearningProgress(selectedPhaseId);
+  const completedLessons = phaseProgress.completedLessonIds.length;
+  const totalLessons = getLessonCountForPhase(selectedPhaseId);
+  const overallProgress = computeOverallProgressFromMap();
+  const pendingRequests = Array.from(state.userBookingsByPhaseId.values()).filter((booking) => {
+    const status = getEffectiveBookingStatus(booking);
+    return status === BOOKING_STATUS_PENDING || status === BOOKING_STATUS_REVIEWING;
+  }).length;
+  const unlockedCount = unlockedPhaseSet.size;
+  const completedCount = completedPhaseSet.size;
+  const shortName = normalizeString(state.profile?.name || state.user?.displayName || "Researcher").split(" ")[0] || "Researcher";
+
+  if (elements.homeWelcomeName) {
+    elements.homeWelcomeName.textContent = shortName;
+  }
+  if (elements.homeUnlockedPhasesCount) {
+    elements.homeUnlockedPhasesCount.textContent = String(unlockedCount);
+  }
+  if (elements.homeCompletedPhasesCount) {
+    elements.homeCompletedPhasesCount.textContent = String(completedCount);
+  }
+  if (elements.homePendingRequestsCount) {
+    elements.homePendingRequestsCount.textContent = String(pendingRequests);
+  }
+  if (elements.homeProgressPercent) {
+    elements.homeProgressPercent.textContent = `${overallProgress}%`;
+  }
+  if (elements.homeProgressBarFill) {
+    elements.homeProgressBarFill.style.width = `${overallProgress}%`;
+  }
+  if (elements.homeContinueTitle) {
+    elements.homeContinueTitle.textContent = `${completedLessons} of ${totalLessons} lessons complete`;
+  }
+  if (elements.homeContinueSubtitle) {
+    elements.homeContinueSubtitle.textContent = `Phase ${selectedPhase.order || 1}: ${selectedPhase.title}`;
+  }
+}
+
+function renderFeatureGatePanel(overallProgress = 0) {
+  if (!elements.featureGateList) {
+    return;
+  }
+
+  const unlocks = computeFeatureUnlocks(overallProgress);
+  const featurePresentationById = {
+    tradingBot: {
+      title: "Install AI Bot",
+      note: "Deploy your first neural agent",
+      icon: "H"
+    },
+    investment: {
+      title: "Become Part of the Lab",
+      note: "Join our core research community",
+      icon: "U"
+    },
+    affiliate: {
+      title: "Spread Partnership",
+      note: "Share the vision with the world",
+      icon: "G"
+    }
+  };
+
+  elements.featureGateList.innerHTML = "";
+  unlocks.forEach((unlock) => {
+    const preset = featurePresentationById[unlock.featureId] || {
+      title: unlock.title,
+      note: unlock.unlocked ? "Unlocked now" : "Complete more phases to unlock",
+      icon: ">"
+    };
+
+    const card = document.createElement("article");
+    card.className = "feature-gate-card";
+    card.style.opacity = unlock.unlocked ? "1" : "0.66";
+
+    const icon = document.createElement("span");
+    icon.className = "feature-gate-icon";
+    icon.textContent = preset.icon;
+
+    const copy = document.createElement("div");
+    copy.className = "feature-gate-copy";
+
+    const title = document.createElement("p");
+    title.className = "feature-gate-title";
+    title.textContent = preset.title;
+
+    const note = document.createElement("p");
+    note.className = "feature-gate-note";
+    note.textContent = preset.note;
+
+    copy.appendChild(title);
+    copy.appendChild(note);
+
+    const action = document.createElement("div");
+    action.className = "feature-gate-action";
+
+    const lock = document.createElement("span");
+    lock.className = "feature-gate-lock";
+    lock.textContent = unlock.unlocked ? "" : "x";
+
+    const arrow = document.createElement("span");
+    arrow.className = "feature-gate-arrow";
+    arrow.textContent = ">";
+
+    action.appendChild(lock);
+    action.appendChild(arrow);
+
+    card.appendChild(icon);
+    card.appendChild(copy);
+    card.appendChild(action);
+    elements.featureGateList.appendChild(card);
+  });
+}
+
+function renderClassroomPanel() {
+  if (!elements.classroomPanel || !state.user) {
+    return;
+  }
+
+  const unlockedPhaseSet = getUnlockedPhaseSet();
+  const completedPhaseSet = getCompletedPhaseSet();
+  const selectedPhaseId = ensureSelectedLearningPhase(unlockedPhaseSet, completedPhaseSet);
+  const selectedPhase = getPhaseById(selectedPhaseId) || { title: "Foundations", order: 1 };
+  const phaseProgress = getPhaseLearningProgress(selectedPhaseId);
+  const accessInfo = getLearningAccessInfo(selectedPhaseId, unlockedPhaseSet, completedPhaseSet);
+  const totalLessons = getLessonCountForPhase(selectedPhaseId);
+  const completedLessons = phaseProgress.completedLessonIds.length;
+
+  if (elements.classroomPhaseTitle) {
+    elements.classroomPhaseTitle.textContent = selectedPhase.title;
+  }
+  if (elements.classroomProgressBarFill) {
+    elements.classroomProgressBarFill.style.width = `${phaseProgress.progressPercent}%`;
+  }
+  if (elements.classroomProgressText) {
+    elements.classroomProgressText.textContent = `${phaseProgress.progressPercent}%`;
+  }
+  if (elements.classroomLessonCountText) {
+    elements.classroomLessonCountText.textContent = `${completedLessons} of ${totalLessons} lessons complete`;
+  }
+
+  renderLessonListForPhase(selectedPhaseId, accessInfo);
+  renderLessonDetailForPhase(selectedPhaseId, accessInfo);
+}
+
+function renderLearningPanel() {
+  if (!elements.learningPanel || !state.user) {
+    return;
+  }
+
+  const unlockedPhaseSet = getUnlockedPhaseSet();
+  const completedPhaseSet = getCompletedPhaseSet();
+  const selectedPhaseId = ensureSelectedLearningPhase(unlockedPhaseSet, completedPhaseSet);
+  const selectedPhase = getPhaseById(selectedPhaseId) || { title: "Foundations", description: "" };
+  const phaseProgress = getPhaseLearningProgress(selectedPhaseId);
+  const overallProgress = computeOverallProgressFromMap();
+  const lessonTotal = getLessonCountForPhase(selectedPhaseId);
+  const lessonCompleted = phaseProgress.completedLessonIds.length;
+
+  if (elements.learningProgressText) {
+    elements.learningProgressText.textContent = `${overallProgress}%`;
+  }
+  if (elements.learningProgressBarFill) {
+    elements.learningProgressBarFill.style.width = `${overallProgress}%`;
+  }
+  if (elements.learningCurrentPhaseTitle) {
+    elements.learningCurrentPhaseTitle.textContent = `Phase ${selectedPhase.order || 1}: ${selectedPhase.title}`;
+  }
+  if (elements.learningCurrentPhaseDescription) {
+    elements.learningCurrentPhaseDescription.textContent = selectedPhase.description || "";
+  }
+  if (elements.learningCurrentPhaseProgressValue) {
+    elements.learningCurrentPhaseProgressValue.textContent = `${phaseProgress.progressPercent}%`;
+  }
+  if (elements.learningCurrentPhaseProgressFill) {
+    elements.learningCurrentPhaseProgressFill.style.width = `${phaseProgress.progressPercent}%`;
+  }
+  if (elements.learningCurrentPhaseLessonCount) {
+    elements.learningCurrentPhaseLessonCount.textContent = `${lessonCompleted} of ${lessonTotal} lessons complete`;
+  }
+
+  renderFeatureGatePanel(overallProgress);
+  renderClassroomPanel();
+  renderHomePanel();
+
+  if (state.profile) {
+    state.profile.progress = overallProgress;
+    const currentPhaseIsCompleted = phaseProgress.progressPercent >= 100;
+    if (currentPhaseIsCompleted && !state.profile.completedPhases.includes(selectedPhaseId)) {
+      state.profile.completedPhases = Array.from(new Set([...(state.profile.completedPhases || []), selectedPhaseId]));
+    }
+  }
+}
+
+function selectLearningPhase(phaseId, shouldScroll = false) {
+  state.selectedLearningPhaseId = canonicalizePhaseId(phaseId);
+  state.selectedLessonId = "";
+  renderClassroomPanel();
+  if (shouldScroll) {
+    navigateToClassroom(phaseId, "overview");
+  }
+}
+
+async function completeSelectedLesson() {
+  if (!state.user || !db || !docFn || !setDocFn || !serverTimestampFn || !arrayUnionFn) {
+    showMessage("Login is required to complete lessons.", "error");
+    return;
+  }
+
+  const phaseId = canonicalizePhaseId(state.selectedLearningPhaseId);
+  const lessons = getLessonsForPhase(phaseId);
+  if (lessons.length === 0) {
+    showMessage("No lessons available for this phase.", "error");
+    return;
+  }
+
+  const lessonId = state.selectedLessonId;
+  const lesson = getLessonById(phaseId, lessonId);
+  if (!lesson) {
+    showMessage("Select a lesson first.", "error");
+    return;
+  }
+
+  const reflection = elements.lessonReflectionInput.value.trim();
+  if (!reflection) {
+    showMessage("Write your reflection before completing this lesson.", "info");
+    return;
+  }
+
+  const unlockedPhaseSet = getUnlockedPhaseSet();
+  const completedPhaseSet = getCompletedPhaseSet();
+  const accessInfo = getLearningAccessInfo(phaseId, unlockedPhaseSet, completedPhaseSet);
+  if (!accessInfo.accessible) {
+    showMessage(accessInfo.reason, "error");
+    return;
+  }
+
+  const progress = getPhaseLearningProgress(phaseId);
+  const completedSet = new Set(progress.completedLessonIds);
+  const lessonIndex = lessons.findIndex((item) => item.lessonId === lessonId);
+
+  if (!completedSet.has(lessonId) && !isLessonUnlocked(lessonIndex, progress.completedLessonIds.length)) {
+    showMessage("Complete lessons sequentially.", "error");
+    return;
+  }
+
+  completedSet.add(lessonId);
+  const orderedCompletedIds = lessons
+    .map((item) => item.lessonId)
+    .filter((id) => completedSet.has(id));
+  const phaseProgressPercent = toProgressPercent(orderedCompletedIds.length, lessons.length);
+  const nextProgress = {
+    phaseId,
+    completedLessonIds: orderedCompletedIds,
+    completedLessonSet: new Set(orderedCompletedIds),
+    reflections: {
+      ...(progress.reflections || {}),
+      [lessonId]: reflection
+    },
+    progressPercent: phaseProgressPercent,
+    updatedAtMs: Date.now()
+  };
+
+  const nextMap = new Map(state.learningProgressByPhaseId);
+  nextMap.set(phaseId, nextProgress);
+  const overallProgress = computeOverallProgressFromMap(nextMap);
+
+  try {
+    const progressRef = docFn(db, "users", state.user.uid, "progress", phaseId);
+    await setDocFn(progressRef, {
+      phaseId,
+      completedLessonIds: orderedCompletedIds,
+      completedLessons: orderedCompletedIds,
+      reflections: nextProgress.reflections,
+      completedCount: orderedCompletedIds.length,
+      totalLessons: lessons.length,
+      progressPercent: phaseProgressPercent,
+      lastCompletedLessonId: lessonId,
+      updatedAt: serverTimestampFn()
+    }, { merge: true });
+
+    const userRef = docFn(db, "users", state.user.uid);
+    const userPatch = {
+      progress: overallProgress,
+      updatedAt: serverTimestampFn()
+    };
+    if (phaseProgressPercent >= 100) {
+      userPatch.completedPhases = arrayUnionFn(phaseId);
+    }
+    await setDocFn(userRef, userPatch, { merge: true });
+
+    state.learningProgressByPhaseId = nextMap;
+    state.profile = {
+      ...(state.profile || {}),
+      progress: overallProgress,
+      completedPhases: phaseProgressPercent >= 100
+        ? Array.from(new Set([...(state.profile?.completedPhases || []), phaseId]))
+        : (state.profile?.completedPhases || [])
+    };
+
+    showMessage(`Lesson completed: ${lesson.title}`, "success");
+    renderLearningPanel();
+    renderPhases();
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      showMessage("Lesson progress write blocked by Firestore rules.", "error");
+    } else {
+      showMessage(`Failed to save lesson progress: ${error.message}`, "error");
+    }
+  }
+}
+
+function showDeleteAccountModal() {
+  elements.deleteAccountConfirmInput.value = "";
+  elements.deleteAccountModal.classList.remove("hidden");
+  elements.deleteAccountConfirmInput.focus();
+}
+
+function hideDeleteAccountModal() {
+  elements.deleteAccountModal.classList.add("hidden");
+}
+
+async function handleDeleteAccount(event) {
+  event.preventDefault();
+
+  if (!state.user) {
+    showMessage("Please login first.", "error");
+    return;
+  }
+
+  const confirmation = elements.deleteAccountConfirmInput.value.trim();
+  if (confirmation !== DELETE_ACCOUNT_CONFIRM_TOKEN) {
+    showMessage("Type DELETE to confirm permanent account deletion.", "error");
+    return;
+  }
+
+  try {
+    await callBackendFunction("deleteAccountCascade", {
+      confirmation: DELETE_ACCOUNT_CONFIRM_TOKEN
+    });
+
+    hideDeleteAccountModal();
+    showMessage("Account deleted permanently.", "success");
+    await handleLogout();
+  } catch (error) {
+    if (error?.code === "functions-unavailable") {
+      showMessage("Account deletion service is not available. Deploy Cloud Functions first.", "error");
+    } else {
+      showMessage(`Account deletion failed: ${error.message}`, "error");
+    }
+  }
+}
+
+function getNavTargetElement(sectionKey) {
+  if (sectionKey === "home") {
+    return elements.homePanel;
+  }
+  if (sectionKey === "profile") {
+    return elements.profilePanel;
+  }
+  if (sectionKey === "learning") {
+    return elements.learningPanel;
+  }
+  if (sectionKey === "features") {
+    return elements.featureGatePanel;
+  }
+  if (sectionKey === "classroom") {
+    return elements.classroomPanel;
+  }
+  if (sectionKey === "admin") {
+    return elements.adminPanel;
+  }
+  return elements.overviewPanel;
+}
+
+function getSectionDisplayName(sectionKey) {
+  if (sectionKey === "home") {
+    return "Home";
+  }
+  if (sectionKey === "overview") {
+    return "Courses";
+  }
+  if (sectionKey === "learning") {
+    return "My Learning";
+  }
+  if (sectionKey === "features") {
+    return "Advanced";
+  }
+  if (sectionKey === "profile") {
+    return "Profile";
+  }
+  if (sectionKey === "classroom") {
+    return "Classroom";
+  }
+  if (sectionKey === "admin") {
+    return "Admin";
+  }
+  return "Workspace";
+}
+
+function updateTopbarContext() {
+  if (!elements.topbarSectionLabel || !elements.topbarProgressLabel || !elements.topbarBookingLabel) {
+    return;
+  }
+
+  elements.topbarSectionLabel.textContent = getSectionDisplayName(state.selectedNavSection);
+
+  if (!state.user) {
+    elements.topbarProgressLabel.textContent = "Progress 0%";
+    elements.topbarBookingLabel.textContent = "Sign in to continue";
+    return;
+  }
+
+  const overallProgress = computeOverallProgressFromMap();
+  const pendingCount = Array.from(state.userBookingsByPhaseId.values()).filter((booking) => {
+    const status = getEffectiveBookingStatus(booking);
+    return status === BOOKING_STATUS_PENDING || status === BOOKING_STATUS_REVIEWING;
+  }).length;
+
+  elements.topbarProgressLabel.textContent = `Progress ${overallProgress}%`;
+  if (state.isAdmin) {
+    elements.topbarBookingLabel.textContent = "Admin moderation enabled";
+  } else if (pendingCount > 0) {
+    elements.topbarBookingLabel.textContent = `${pendingCount} booking request${pendingCount > 1 ? "s" : ""} in queue`;
+  } else {
+    elements.topbarBookingLabel.textContent = "No active bookings";
+  }
+}
+
+function isNavSectionAvailable(sectionKey) {
+  if (sectionKey === "admin") {
+    return Boolean(state.user && state.isAdmin);
+  }
+  return Boolean(
+    state.user &&
+      (sectionKey === "home" ||
+        sectionKey === "overview" ||
+        sectionKey === "learning" ||
+        sectionKey === "features" ||
+        sectionKey === "profile" ||
+        sectionKey === "classroom")
+  );
+}
+
+function ensureValidNavSection() {
+  if (isNavSectionAvailable(state.selectedNavSection)) {
+    return;
+  }
+  state.selectedNavSection = state.user ? "home" : "home";
+}
+
+function renderSectionVisibility() {
+  const shouldShowAppShell = Boolean(state.user);
+  if (elements.authLanding) {
+    elements.authLanding.classList.toggle("hidden", shouldShowAppShell);
+  }
+  if (elements.appShell) {
+    elements.appShell.classList.toggle("hidden", !shouldShowAppShell);
+  }
+  if (elements.workspaceNav) {
+    elements.workspaceNav.classList.toggle("hidden", !shouldShowAppShell);
+  }
+  if (!shouldShowAppShell) {
+    return;
+  }
+
+  const panelsByKey = new Map([
+    ["home", elements.homePanel],
+    ["overview", elements.overviewPanel],
+    ["learning", elements.learningPanel],
+    ["features", elements.featureGatePanel],
+    ["profile", elements.profilePanel],
+    ["classroom", elements.classroomPanel],
+    ["admin", elements.adminPanel]
+  ]);
+
+  panelsByKey.forEach((panel, key) => {
+    if (!panel) {
+      return;
+    }
+    panel.classList.toggle("hidden", state.selectedNavSection !== key);
+  });
+}
+
+function renderWorkspaceNavigation() {
+  if (!elements.workspaceNav) {
+    return;
+  }
+
+  ensureValidNavSection();
+
+  elements.workspaceNavButtons.forEach((button) => {
+    const sectionKey = button.dataset.navSection || "overview";
+    const adminOnly = button.dataset.navAdminOnly === "true";
+    if (adminOnly) {
+      button.classList.add("hidden");
+    }
+
+    button.disabled = !isNavSectionAvailable(sectionKey);
+    button.classList.toggle("active", state.selectedNavSection === sectionKey);
+  });
+
+  renderSectionVisibility();
+  updateTopbarContext();
+  refreshLucideIcons();
+}
+
+function navigateToSection(sectionKey, { smooth = true } = {}) {
+  void smooth;
+  if (!isNavSectionAvailable(sectionKey)) {
+    if (!state.user) {
+      showMessage("Please log in to access this section.", "info");
+      openLoginFlow();
+      return;
+    }
+    showMessage("Admin access required for this section.", "error");
+    return;
+  }
+
+  state.selectedNavSection = sectionKey;
+  renderWorkspaceNavigation();
+}
+
+function navigateToClassroom(phaseId, fromSection = state.selectedNavSection) {
+  state.selectedLearningPhaseId = canonicalizePhaseId(phaseId);
+  state.selectedLessonId = "";
+  if (fromSection !== "classroom") {
+    state.classroomReturnSection = fromSection;
+  }
+  state.selectedNavSection = "classroom";
+  renderClassroomPanel();
+  renderWorkspaceNavigation();
 }
 
 function renderAdminPanel() {
@@ -860,13 +1946,12 @@ function renderAdminPanel() {
   });
 
   if (!state.isAdmin) {
-    elements.adminPanel.classList.add("hidden");
     elements.adminRows.innerHTML = "";
     elements.adminEmpty.classList.add("hidden");
+    renderWorkspaceNavigation();
     return;
   }
 
-  elements.adminPanel.classList.remove("hidden");
   elements.adminRows.innerHTML = "";
 
   const sourceBookings = state.selectedAdminTab === "all"
@@ -882,8 +1967,9 @@ function renderAdminPanel() {
   if (bookings.length === 0) {
     elements.adminEmpty.textContent = state.selectedAdminTab === "all"
       ? "No bookings yet."
-      : "No pending bookings right now.";
+      : "No pending or reviewing bookings right now.";
     elements.adminEmpty.classList.remove("hidden");
+    renderWorkspaceNavigation();
     return;
   }
 
@@ -910,7 +1996,18 @@ function renderAdminPanel() {
 
     const actionsCell = row.querySelector(".admin-actions-cell");
 
-    if (effectiveStatus === BOOKING_STATUS_PENDING) {
+    if (effectiveStatus === BOOKING_STATUS_PENDING || effectiveStatus === BOOKING_STATUS_REVIEWING) {
+      if (effectiveStatus === BOOKING_STATUS_PENDING) {
+        const reviewingBtn = document.createElement("button");
+        reviewingBtn.type = "button";
+        reviewingBtn.className = "admin-action-btn cancel";
+        reviewingBtn.textContent = "Reviewing";
+        reviewingBtn.addEventListener("click", () => {
+          void moveBookingToReviewingByAdmin(booking);
+        });
+        actionsCell.appendChild(reviewingBtn);
+      }
+
       const approveBtn = document.createElement("button");
       approveBtn.type = "button";
       approveBtn.className = "admin-action-btn approve";
@@ -944,6 +2041,8 @@ function renderAdminPanel() {
 
     elements.adminRows.appendChild(row);
   });
+
+  renderWorkspaceNavigation();
 }
 
 function updateAuthButtons() {
@@ -957,9 +2056,13 @@ function updateAuthButtons() {
   elements.loginBtn.disabled = loginBlocked || !state.firebaseReady || isSignedIn;
   elements.loginModalBtn.disabled = loginBlocked || !state.firebaseReady || isSignedIn;
   elements.logoutBtn.disabled = !state.firebaseReady || !isSignedIn;
+  if (elements.profileSignOutBtn) {
+    elements.profileSignOutBtn.disabled = !state.firebaseReady || !isSignedIn;
+  }
 
   elements.loginBtn.title = loginBlocked ? blockTitle : "";
   elements.loginModalBtn.title = loginBlocked ? blockTitle : "";
+  renderSectionVisibility();
 }
 
 function updateProfileUI() {
@@ -968,6 +2071,16 @@ function updateProfileUI() {
     if (elements.adminChip) {
       elements.adminChip.classList.add("hidden");
     }
+    if (elements.profileReferralCode) {
+      elements.profileReferralCode.textContent = "------";
+    }
+    if (elements.profileInviteCount) {
+      elements.profileInviteCount.textContent = "0";
+    }
+    if (elements.profileConversionCount) {
+      elements.profileConversionCount.textContent = "0";
+    }
+    renderWorkspaceNavigation();
     return;
   }
 
@@ -976,10 +2089,26 @@ function updateProfileUI() {
   elements.profileEmail.textContent = state.profile.email || "-";
   elements.profilePhoneNumber.textContent = state.profile.phoneNumber || "-";
   elements.profileWhatsapp.textContent = state.profile.whatsappNumber || "-";
+  if (elements.profileReferralCode) {
+    const referralSeed = normalizeString(
+      state.profile.referralCode || state.profile.referral || state.user.uid || ""
+    ).replace(/[^a-z0-9]/gi, "").toUpperCase();
+    elements.profileReferralCode.textContent = referralSeed ? referralSeed.slice(0, 6).padEnd(6, "X") : "------";
+  }
+  if (elements.profileInviteCount) {
+    elements.profileInviteCount.textContent = String(Math.max(0, Number(state.profile.invites || state.profile.inviteCount || 0)));
+  }
+  if (elements.profileConversionCount) {
+    elements.profileConversionCount.textContent = String(Math.max(0, Number(state.profile.conversions || state.profile.conversionCount || 0)));
+  }
 
   if (elements.adminChip) {
     elements.adminChip.classList.toggle("hidden", !state.isAdmin);
   }
+
+  renderHomePanel();
+  renderLearningPanel();
+  renderWorkspaceNavigation();
 }
 
 function showLoginModal() {
@@ -997,17 +2126,16 @@ function showPhoneModal(phaseId = null) {
 
   const isBookingFlow = Boolean(state.pendingPhaseId);
   elements.phoneTitle.textContent = isBookingFlow
-    ? "Enter booking contact details"
-    : "Update contact details";
+    ? "Enter booking WhatsApp number"
+    : "Update WhatsApp number";
   elements.phoneSubmitBtn.textContent = isBookingFlow
     ? "Submit Booking"
     : "Save Profile";
 
-  elements.phoneNumberInput.value = state.profile?.phoneNumber || "";
   elements.whatsappInput.value = state.profile?.whatsappNumber || state.profile?.phone || "";
 
   elements.phoneModal.classList.remove("hidden");
-  elements.phoneNumberInput.focus();
+  elements.whatsappInput.focus();
 }
 
 function hidePhoneModal() {
@@ -1110,13 +2238,15 @@ async function handleLogout() {
   }
 }
 
-async function saveUserProfile(phoneNumber, whatsappNumber) {
+async function saveUserProfile(whatsappNumber) {
   if (!state.user) {
     throw new Error("User not authenticated.");
   }
   if (!db || !docFn || !setDocFn || !serverTimestampFn) {
     throw new Error("Firestore is not initialized.");
   }
+
+  const phoneNumber = whatsappNumber;
 
   const userRef = docFn(db, "users", state.user.uid);
   const payload = {
@@ -1148,15 +2278,11 @@ async function saveUserProfile(phoneNumber, whatsappNumber) {
   };
   updateProfileUI();
   renderPhases();
+  renderLearningPanel();
 }
 
-function buildBookingPayload(
-  bookingId,
-  userId,
-  canonicalPhaseId,
-  phoneNumber,
-  whatsappNumber
-) {
+function buildBookingPayload(bookingId, userId, canonicalPhaseId, whatsappNumber) {
+  const phoneNumber = whatsappNumber;
   const resolvedCanonicalPhaseId = canonicalizePhaseId(canonicalPhaseId);
   const legacyPhaseId = getLegacyPhaseIdForCanonical(resolvedCanonicalPhaseId);
   const legacyPhaseAlias = legacyPhaseId || resolvedCanonicalPhaseId;
@@ -1215,8 +2341,8 @@ function buildCanonicalPhasePayload(phaseId) {
   };
 }
 
-async function requestBookingForPhase(phaseId, phoneNumber, whatsappNumber) {
-  if (!state.firebaseReady || !db || !runTransactionFn || !docFn || !serverTimestampFn) {
+async function requestBookingForPhase(phaseId, whatsappNumber) {
+  if (!state.firebaseReady || !db) {
     showMessage("Firestore is not ready.", "error");
     return false;
   }
@@ -1226,16 +2352,21 @@ async function requestBookingForPhase(phaseId, phoneNumber, whatsappNumber) {
   }
 
   const canonicalPhaseId = canonicalizePhaseId(phaseId);
+  if (canonicalPhaseId === "phase1") {
+    selectLearningPhase("phase1", true);
+    return true;
+  }
+
   const selectedPhase = getPhaseById(canonicalPhaseId);
   if (!selectedPhase) {
     showMessage("Phase not found.", "error");
     return false;
   }
 
-  const unlockedPhaseSet = getUnlockedPhaseSet();
-  const missingPrerequisitePhase = getMissingPrerequisitePhase(canonicalPhaseId, unlockedPhaseSet);
+  const completedPhaseSet = getCompletedPhaseSet();
+  const missingPrerequisitePhase = getMissingCompletionPrerequisitePhase(canonicalPhaseId, completedPhaseSet);
   if (missingPrerequisitePhase) {
-    showMessage(`Complete ${missingPrerequisitePhase.title} first.`, "info");
+    showMessage(`Complete ${missingPrerequisitePhase.title} lessons first.`, "info");
     return false;
   }
 
@@ -1245,6 +2376,34 @@ async function requestBookingForPhase(phaseId, phoneNumber, whatsappNumber) {
   }
 
   const userId = state.user.uid;
+
+  if (state.callablesReady) {
+    try {
+      await callBackendFunction("createBooking", {
+        phaseId: canonicalPhaseId,
+        phoneNumber: whatsappNumber,
+        whatsappNumber
+      });
+      showMessage("Booking request submitted and waiting for admin approval.", "success");
+      return true;
+    } catch (error) {
+      const normalizedCode = String(error?.code || "").toLowerCase();
+      const normalizedMessage = String(error?.message || "").toLowerCase();
+      if (normalizedCode.includes("failed-precondition") || normalizedMessage.includes("already")) {
+        showMessage(error.message || "Booking cannot be created due to progression/lifecycle preconditions.", "info");
+      } else if (normalizedCode.includes("resource-exhausted")) {
+        showMessage("No seats available for this phase.", "error");
+      } else if (normalizedCode.includes("permission-denied")) {
+        showMessage("Booking blocked by backend authorization.", "error");
+      } else if (normalizedCode.includes("unavailable")) {
+        showMessage("Booking service unavailable. Retrying with legacy client transaction.", "info");
+      } else {
+        showMessage(`Booking failed: ${error.message}`, "error");
+        return false;
+      }
+    }
+  }
+
   const bookingId = `${userId}_${canonicalPhaseId}`;
   const bookingRef = docFn(db, "bookings", bookingId);
   const canonicalPhaseRef = docFn(db, "phases", canonicalPhaseId);
@@ -1289,7 +2448,6 @@ async function requestBookingForPhase(phaseId, phoneNumber, whatsappNumber) {
           bookingId,
           userId,
           canonicalPhaseId,
-          phoneNumber,
           whatsappNumber
         )
       );
@@ -1313,12 +2471,55 @@ async function requestBookingForPhase(phaseId, phoneNumber, whatsappNumber) {
   }
 }
 
+async function performAdminBookingCallableAction(functionName, booking, successMessage) {
+  if (!state.callablesReady) {
+    return false;
+  }
+
+  await callBackendFunction(functionName, {
+    bookingId: booking.bookingId
+  });
+  showMessage(successMessage, "success");
+  return true;
+}
+
+async function moveBookingToReviewingByAdmin(booking) {
+  if (!state.isAdmin || !state.firebaseReady || !booking?.bookingId) {
+    return;
+  }
+
+  try {
+    const handledByCallable = await performAdminBookingCallableAction(
+      "markBookingReviewing",
+      booking,
+      `Booking ${booking.bookingId} moved to reviewing.`
+    );
+    if (handledByCallable) {
+      return;
+    }
+    showMessage("Reviewing action requires Cloud Functions deployment.", "error");
+  } catch (error) {
+    showMessage(`Failed to set reviewing: ${error.message}`, "error");
+  }
+}
+
 async function rejectBookingByAdmin(booking) {
   if (!state.isAdmin || !state.firebaseReady || !db || !runTransactionFn || !docFn || !serverTimestampFn) {
     return;
   }
 
   try {
+    if (state.callablesReady) {
+      const handledByCallable = await performAdminBookingCallableAction(
+        "rejectBooking",
+        booking,
+        `Booking ${booking.bookingId} rejected.`
+      );
+      if (handledByCallable) {
+        return;
+      }
+    }
+
     await runTransactionFn(db, async (transaction) => {
       const bookingRef = docFn(db, "bookings", booking.bookingId);
       const liveSnapshot = await transaction.get(bookingRef);
@@ -1328,8 +2529,8 @@ async function rejectBookingByAdmin(booking) {
       }
 
       const liveBooking = normalizeBookingDoc(liveSnapshot.id, liveSnapshot.data());
-      if (liveBooking.status !== BOOKING_STATUS_PENDING) {
-        throw makeAppError("booking-not-pending", "Only pending bookings can be rejected.");
+      if (liveBooking.status !== BOOKING_STATUS_PENDING && liveBooking.status !== BOOKING_STATUS_REVIEWING) {
+        throw makeAppError("booking-not-pending", "Only pending/reviewing bookings can be rejected.");
       }
       if (getEffectiveBookingStatus(liveBooking) === BOOKING_STATUS_EXPIRED) {
         throw makeAppError("booking-expired", "This pending booking has expired.");
@@ -1348,7 +2549,7 @@ async function rejectBookingByAdmin(booking) {
     showMessage(`Booking ${booking.bookingId} rejected.`, "success");
   } catch (error) {
     if (error?.code === "booking-not-pending") {
-      showMessage("Only pending bookings can be rejected.", "error");
+      showMessage("Only pending or reviewing bookings can be rejected.", "error");
     } else if (error?.code === "booking-expired") {
       showMessage("This booking already expired. No action needed.", "info");
     } else if (isPermissionDeniedError(error)) {
@@ -1373,6 +2574,17 @@ async function approveBookingByAdmin(booking) {
   }
 
   try {
+    if (state.callablesReady) {
+      const handledByCallable = await performAdminBookingCallableAction(
+        "approveBooking",
+        booking,
+        `Booking ${booking.bookingId} approved.`
+      );
+      if (handledByCallable) {
+        return;
+      }
+    }
+
     await runTransactionFn(db, async (transaction) => {
       const bookingRef = docFn(db, "bookings", booking.bookingId);
       const liveBookingSnapshot = await transaction.get(bookingRef);
@@ -1382,8 +2594,8 @@ async function approveBookingByAdmin(booking) {
       }
 
       const liveBooking = normalizeBookingDoc(liveBookingSnapshot.id, liveBookingSnapshot.data());
-      if (liveBooking.status !== BOOKING_STATUS_PENDING) {
-        throw makeAppError("booking-not-pending", "Only pending bookings can be approved.");
+      if (liveBooking.status !== BOOKING_STATUS_PENDING && liveBooking.status !== BOOKING_STATUS_REVIEWING) {
+        throw makeAppError("booking-not-pending", "Only pending/reviewing bookings can be approved.");
       }
       if (getEffectiveBookingStatus(liveBooking) === BOOKING_STATUS_EXPIRED) {
         throw makeAppError("booking-expired", "This pending booking has expired.");
@@ -1441,7 +2653,7 @@ async function approveBookingByAdmin(booking) {
     showMessage(`Booking ${booking.bookingId} approved.`, "success");
   } catch (error) {
     if (error?.code === "booking-not-pending") {
-      showMessage("Only pending bookings can be approved.", "error");
+      showMessage("Only pending or reviewing bookings can be approved.", "error");
     } else if (error?.code === "booking-expired") {
       showMessage("Cannot approve: booking has expired.", "error");
     } else if (error?.code === "phase-full") {
@@ -1468,6 +2680,17 @@ async function cancelApprovedBookingByAdmin(booking) {
   }
 
   try {
+    if (state.callablesReady) {
+      const handledByCallable = await performAdminBookingCallableAction(
+        "cancelBooking",
+        booking,
+        `Booking ${booking.bookingId} cancelled and seat released.`
+      );
+      if (handledByCallable) {
+        return;
+      }
+    }
+
     await runTransactionFn(db, async (transaction) => {
       const bookingRef = docFn(db, "bookings", booking.bookingId);
       const liveBookingSnapshot = await transaction.get(bookingRef);
@@ -1544,7 +2767,7 @@ function maybePromptForContactDetails() {
     return;
   }
 
-  const needsContact = !state.profile.phoneNumber || !state.profile.whatsappNumber;
+  const needsContact = !state.profile.whatsappNumber;
   if (!needsContact) {
     state.hasPromptedForContact = false;
     return;
@@ -1564,7 +2787,7 @@ function maybePromptForContactDetails() {
   }
 
   state.hasPromptedForContact = true;
-  showMessage("Enter your phone and WhatsApp numbers to continue.", "info");
+  showMessage("Enter your WhatsApp number to continue.", "info");
   showPhoneModal();
 }
 
@@ -1589,6 +2812,7 @@ function subscribeToPhases() {
 
       state.phases = mergeWithCanonicalPhases(nextPhases);
       renderPhases();
+      renderLearningPanel();
 
       if (!state.hasLoadedPhases) {
         state.hasLoadedPhases = true;
@@ -1603,7 +2827,9 @@ function subscribeToPhases() {
     },
     (error) => {
       if (isPermissionDeniedError(error)) {
-        showMessage("Phase read blocked by Firestore rules.", "error");
+        if (state.user) {
+          showMessage("Unable to load phases due to Firestore access rules.", "error");
+        }
       } else {
         showMessage(`Failed to load phases: ${error.message}`, "error");
       }
@@ -1640,12 +2866,49 @@ function subscribeToUserBookings(userId) {
 
       state.userBookingsByPhaseId = nextBookingsByPhaseId;
       renderPhases();
+      renderLearningPanel();
     },
     (error) => {
       if (isPermissionDeniedError(error)) {
         showMessage("Booking read blocked by Firestore rules.", "error");
       } else {
         showMessage(`Failed to load your bookings: ${error.message}`, "error");
+      }
+    }
+  );
+}
+
+function subscribeToLearningProgress(userId) {
+  if (!state.firebaseReady || !db || !collectionFn || !onSnapshotFn) {
+    return;
+  }
+
+  if (state.learningProgressUnsubscribe) {
+    state.learningProgressUnsubscribe();
+    state.learningProgressUnsubscribe = null;
+  }
+
+  const progressCollection = collectionFn(db, "users", userId, "progress");
+  state.learningProgressUnsubscribe = onSnapshotFn(
+    progressCollection,
+    (snapshot) => {
+      const nextProgressByPhaseId = new Map();
+      snapshot.forEach((progressDoc) => {
+        const normalized = normalizeLearningProgressDoc(progressDoc.id, progressDoc.data());
+        if (normalized.phaseId) {
+          nextProgressByPhaseId.set(normalized.phaseId, normalized);
+        }
+      });
+
+      state.learningProgressByPhaseId = nextProgressByPhaseId;
+      renderLearningPanel();
+      renderPhases();
+    },
+    (error) => {
+      if (isPermissionDeniedError(error)) {
+        showMessage("Learning progress read blocked by Firestore rules.", "error");
+      } else {
+        showMessage(`Failed to load learning progress: ${error.message}`, "error");
       }
     }
   );
@@ -1672,6 +2935,7 @@ function subscribeToUserProfile(user) {
 
       updateProfileUI();
       renderPhases();
+      renderLearningPanel();
       maybePromptForContactDetails();
     },
     (error) => {
@@ -1698,8 +2962,10 @@ function subscribeToAdminPendingBookings() {
   state.adminBookingsUnsubscribe = onSnapshotFn(
     bookingCollection,
     (snapshot) => {
-      const previousBookingsById = new Map(
-        state.adminPendingBookings.map((booking) => [booking.bookingId, booking])
+      const previousPendingVoiceBookingsById = new Map(
+        state.adminPendingBookings
+          .filter((booking) => booking.status === BOOKING_STATUS_PENDING)
+          .map((booking) => [booking.bookingId, booking])
       );
 
       const nextAllBookings = [];
@@ -1709,12 +2975,19 @@ function subscribeToAdminPendingBookings() {
         const normalized = normalizeBookingDoc(bookingDoc.id, bookingData);
         const rawStatus = normalizeString(bookingData?.status).toLowerCase();
         nextAllBookings.push(normalized);
-        if (rawStatus === BOOKING_STATUS_PENDING && getEffectiveBookingStatus(normalized) === BOOKING_STATUS_PENDING) {
+        if (
+          (rawStatus === BOOKING_STATUS_PENDING || rawStatus === BOOKING_STATUS_REVIEWING) &&
+          (getEffectiveBookingStatus(normalized) === BOOKING_STATUS_PENDING ||
+            getEffectiveBookingStatus(normalized) === BOOKING_STATUS_REVIEWING)
+        ) {
           nextPendingBookings.push(normalized);
         }
       });
 
-      announceNewPendingBookingEvents(previousBookingsById, nextPendingBookings);
+      announceNewPendingBookingEvents(
+        previousPendingVoiceBookingsById,
+        nextPendingBookings.filter((booking) => booking.status === BOOKING_STATUS_PENDING)
+      );
 
       state.adminPendingBookings = nextPendingBookings;
       state.adminAllBookings = nextAllBookings;
@@ -1745,6 +3018,11 @@ function clearUserScopedListeners() {
     state.userDocUnsubscribe();
     state.userDocUnsubscribe = null;
   }
+
+  if (state.learningProgressUnsubscribe) {
+    state.learningProgressUnsubscribe();
+    state.learningProgressUnsubscribe = null;
+  }
 }
 
 function clearAdminListener() {
@@ -1762,8 +3040,10 @@ async function onAuthStateChangedHandler(user) {
   state.isAdmin = isAdminEmail(user?.email);
   state.pendingPhaseId = null;
   state.userBookingsByPhaseId = new Map();
+  state.learningProgressByPhaseId = new Map();
   state.userDocExists = false;
   state.hasPromptedForContact = false;
+  state.selectedLessonId = "";
 
   setSoundEngineAdminMode(state.isAdmin);
   if (!state.isAdmin) {
@@ -1777,17 +3057,24 @@ async function onAuthStateChangedHandler(user) {
 
   updateAuthButtons();
   hidePhoneModal();
+  hideDeleteAccountModal();
 
   if (!user) {
+    state.selectedNavSection = "home";
     state.profile = null;
     updateProfileUI();
     renderPhases();
+    renderLearningPanel();
+    renderHomePanel();
+    renderClassroomPanel();
+    renderFeatureGatePanel(0);
     renderAdminPanel();
     return;
   }
 
   subscribeToUserProfile(user);
   subscribeToUserBookings(user.uid);
+  subscribeToLearningProgress(user.uid);
 
   if (state.isAdmin) {
     showMessage(`Admin access enabled for ${normalizeEmail(user.email)}.`, "success");
@@ -1799,6 +3086,9 @@ async function onAuthStateChangedHandler(user) {
   }
 
   renderPhases();
+  renderLearningPanel();
+  renderHomePanel();
+  renderClassroomPanel();
 }
 
 async function handlePhaseClick(phaseId) {
@@ -1808,16 +3098,26 @@ async function handlePhaseClick(phaseId) {
   }
 
   const canonicalPhaseId = canonicalizePhaseId(phaseId);
+  if (canonicalPhaseId === "phase1") {
+    if (!state.user) {
+      showMessage("Please log in first.", "error");
+      openLoginFlow();
+      return;
+    }
+    selectLearningPhase("phase1", true);
+    return;
+  }
+
   const phase = getPhaseById(canonicalPhaseId);
   if (!phase) {
     showMessage("Phase not found.", "error");
     return;
   }
 
-  const unlockedPhaseSet = getUnlockedPhaseSet();
-  const missingPrerequisitePhase = getMissingPrerequisitePhase(canonicalPhaseId, unlockedPhaseSet);
+  const completedPhaseSet = getCompletedPhaseSet();
+  const missingPrerequisitePhase = getMissingCompletionPrerequisitePhase(canonicalPhaseId, completedPhaseSet);
   if (missingPrerequisitePhase) {
-    showMessage(`Complete ${missingPrerequisitePhase.title} first.`, "info");
+    showMessage(`Complete ${missingPrerequisitePhase.title} lessons first.`, "info");
     return;
   }
 
@@ -1826,12 +3126,13 @@ async function handlePhaseClick(phaseId) {
     return;
   }
 
+  const unlockedPhaseSet = getUnlockedPhaseSet();
   const { phaseState } = resolvePhaseState(canonicalPhaseId, unlockedPhaseSet);
   if (phaseState !== PHASE_STATE_LOCKED) {
     if (phaseState === PHASE_STATE_PENDING) {
       showMessage("This phase is already pending approval.", "info");
     } else {
-      showMessage("This phase is already unlocked.", "info");
+      selectLearningPhase(canonicalPhaseId, true);
     }
     return;
   }
@@ -1848,16 +3149,15 @@ async function handlePhaseClick(phaseId) {
 async function handlePhoneSubmit(event) {
   event.preventDefault();
 
-  const phoneNumber = elements.phoneNumberInput.value.trim();
   const whatsappNumber = elements.whatsappInput.value.trim();
 
-  if (!phoneNumber || !whatsappNumber) {
-    showMessage("Phone and WhatsApp numbers are required.", "error");
+  if (!whatsappNumber) {
+    showMessage("WhatsApp number is required.", "error");
     return;
   }
 
-  if (!isValidPhone(phoneNumber) || !isValidPhone(whatsappNumber)) {
-    showMessage("Please enter valid phone numbers.", "error");
+  if (!isValidPhone(whatsappNumber)) {
+    showMessage("Please enter a valid WhatsApp number.", "error");
     return;
   }
 
@@ -1865,11 +3165,11 @@ async function handlePhoneSubmit(event) {
   state.pendingPhaseId = null;
 
   try {
-    await saveUserProfile(phoneNumber, whatsappNumber);
+    await saveUserProfile(whatsappNumber);
     hidePhoneModal();
 
     if (requestedPhaseId) {
-      await requestBookingForPhase(requestedPhaseId, phoneNumber, whatsappNumber);
+      await requestBookingForPhase(requestedPhaseId, whatsappNumber);
       return;
     }
 
@@ -1890,7 +3190,7 @@ async function handlePhoneSubmit(event) {
 function bindEvents() {
   elements.loginBtn.addEventListener("click", () => {
     registerSoundEngineUserInteraction();
-    openLoginFlow();
+    void handleLogin();
   });
   elements.logoutBtn.addEventListener("click", () => {
     registerSoundEngineUserInteraction();
@@ -1925,13 +3225,99 @@ function bindEvents() {
     state.pendingPhaseId = null;
     hidePhoneModal();
   });
+  if (elements.homeStartLearningBtn) {
+    elements.homeStartLearningBtn.addEventListener("click", () => {
+      registerSoundEngineUserInteraction();
+      navigateToSection("overview");
+    });
+  }
+  if (elements.homeContinueBtn) {
+    elements.homeContinueBtn.addEventListener("click", () => {
+      registerSoundEngineUserInteraction();
+      navigateToClassroom(state.selectedLearningPhaseId || "phase1", "home");
+    });
+  }
+  if (elements.learningContinueBtn) {
+    elements.learningContinueBtn.addEventListener("click", () => {
+      registerSoundEngineUserInteraction();
+      navigateToClassroom(state.selectedLearningPhaseId || "phase1", "learning");
+    });
+  }
+  if (elements.classroomBackBtn) {
+    elements.classroomBackBtn.addEventListener("click", () => {
+      registerSoundEngineUserInteraction();
+      navigateToSection(state.classroomReturnSection || "overview");
+    });
+  }
+  if (elements.profileSignOutBtn) {
+    elements.profileSignOutBtn.addEventListener("click", () => {
+      registerSoundEngineUserInteraction();
+      void handleLogout();
+    });
+  }
+  if (elements.profileInviteBtn) {
+    elements.profileInviteBtn.addEventListener("click", () => {
+      registerSoundEngineUserInteraction();
+      const code = elements.profileReferralCode?.textContent || "------";
+      showMessage(`Referral code ready: ${code}`, "info");
+    });
+  }
+  if (elements.editProfileBtn) {
+    elements.editProfileBtn.addEventListener("click", () => {
+      registerSoundEngineUserInteraction();
+      if (!state.user) {
+        showMessage("Please log in first.", "error");
+        return;
+      }
+      state.pendingPhaseId = null;
+      showPhoneModal();
+    });
+  }
+  if (elements.completeLessonBtn) {
+    elements.completeLessonBtn.addEventListener("click", () => {
+      registerSoundEngineUserInteraction();
+      void completeSelectedLesson();
+    });
+  }
+  if (elements.deleteAccountBtn) {
+    elements.deleteAccountBtn.addEventListener("click", () => {
+      registerSoundEngineUserInteraction();
+      if (!state.user) {
+        showMessage("Please log in first.", "error");
+        return;
+      }
+      showDeleteAccountModal();
+    });
+  }
+  if (elements.deleteAccountCancelBtn) {
+    elements.deleteAccountCancelBtn.addEventListener("click", () => {
+      registerSoundEngineUserInteraction();
+      hideDeleteAccountModal();
+    });
+  }
+  if (elements.deleteAccountForm) {
+    elements.deleteAccountForm.addEventListener("submit", (event) => {
+      registerSoundEngineUserInteraction();
+      void handleDeleteAccount(event);
+    });
+  }
+  elements.workspaceNavButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      registerSoundEngineUserInteraction();
+      const sectionKey = button.dataset.navSection;
+      if (!sectionKey) {
+        return;
+      }
+      navigateToSection(sectionKey);
+    });
+  });
   if (elements.adminChip) {
     elements.adminChip.addEventListener("click", () => {
       registerSoundEngineUserInteraction();
       if (!state.isAdmin) {
         return;
       }
-      elements.adminPanel?.scrollIntoView({ behavior: "smooth", block: "start" });
+      navigateToSection("admin");
     });
   }
   elements.phaseFilterButtons.forEach((button) => {
@@ -1977,15 +3363,17 @@ function bindEvents() {
 
 async function setupFirebase() {
   try {
-    const [appSdk, authSdk, firestoreSdk] = await Promise.all([
+    const [appSdk, authSdk, firestoreSdk, functionsSdk] = await Promise.all([
       import("https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js"),
       import("https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js"),
-      import("https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js")
+      import("https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js"),
+      import("https://www.gstatic.com/firebasejs/10.12.5/firebase-functions.js")
     ]);
 
     const firebaseApp = appSdk.initializeApp(firebaseConfig);
     auth = authSdk.getAuth(firebaseApp);
     db = firestoreSdk.getFirestore(firebaseApp);
+    functionsService = functionsSdk.getFunctions(firebaseApp, FUNCTIONS_REGION);
     provider = new authSdk.GoogleAuthProvider();
     provider.setCustomParameters({ prompt: "select_account" });
 
@@ -2006,17 +3394,25 @@ async function setupFirebase() {
     arrayUnionFn = firestoreSdk.arrayUnion;
     arrayRemoveFn = firestoreSdk.arrayRemove;
     timestampClass = firestoreSdk.Timestamp;
+    httpsCallableFn = functionsSdk.httpsCallable;
+    state.callablesReady = Boolean(functionsService && httpsCallableFn);
 
     state.firebaseReady = true;
     return true;
   } catch (error) {
     state.firebaseReady = false;
+    state.callablesReady = false;
     showMessage(`Firebase init failed: ${error.message}`, "error");
     return false;
   }
 }
 
 function cleanup() {
+  if (bookingUiTicker) {
+    clearInterval(bookingUiTicker);
+    bookingUiTicker = null;
+  }
+
   clearUserScopedListeners();
   clearAdminListener();
 
@@ -2034,8 +3430,20 @@ async function initializeApp() {
   });
 
   renderPhases();
+  renderLearningPanel();
   renderAdminPanel();
+  renderWorkspaceNavigation();
   bindEvents();
+  refreshLucideIcons();
+  bookingUiTicker = window.setInterval(() => {
+    if (!state.user) {
+      return;
+    }
+    renderPhases();
+    if (state.isAdmin && state.selectedNavSection === "admin") {
+      renderAdminPanel();
+    }
+  }, 30000);
   showMessage("Loading phases from Firestore...", "info");
   applyBrowserEnvironmentGuard();
   updateAuthButtons();

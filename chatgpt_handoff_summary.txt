@@ -1,0 +1,71 @@
+Shapla Chottor Web + Mobile Booking Sync Summary
+Date: April 20, 2026
+
+1) Goal
+- Make the web app behave like the mobile app for phase booking/admin.
+- Ensure bookings created from web are visible to the mobile admin app.
+
+2) What Was Implemented (Web)
+- Added canonical 6-phase system:
+  - phase1 Foundations
+  - phase2 Data Analysis
+  - phase3 Object-Oriented Programming
+  - phase4 System Design
+  - phase5 Simulation & Data Systems
+  - phase6 Production Engineering
+- Added track tabs like mobile:
+  - Beginner / Intermediate / Advanced
+- Added booking and gating logic:
+  - Seat availability check ("No Seats Available")
+  - Previous-phase prerequisite checks
+- Added full booking statuses:
+  - pending, approved, rejected, cancelled, expired
+- Upgraded admin panel:
+  - Pending tab (approve/reject)
+  - All Bookings tab (cancel approved seats)
+- Admin email set and enforced:
+  - sushen.biswas.aga@gmail.com
+- Added visible Admin chip in profile for admin users.
+
+3) Mobile Compatibility Changes Added to Booking Payload
+- To support older/newer mobile parsers, web now writes alias fields:
+  - userId + uid
+  - phaseId + phase + phaseKey
+  - status + requestStatus + bookingStatus
+  - phoneNumber + phone
+  - whatsappNumber + whatsapp
+  - bookingId + id
+  - createdAt + createdAtMs
+  - updatedAt + updatedAtMs
+  - phaseCanonicalId + phaseLegacyId + phaseIdAliases
+  - userName/name + userEmail/email
+  - source = "web"
+
+4) Why Mobile "Pending" Can Look Empty
+- Pending requests expire after 15 minutes.
+- Example from screenshot:
+  - Created: April 20, 2026, 1:26:56 PM
+  - Expires: April 20, 2026, 1:41:56 PM
+  - Screenshot time: around 1:45 PM
+  - So pending list is expected to be empty and booking appears as expired.
+
+5) Most Likely Causes If Mobile Still Shows Nothing
+- Web and mobile are connected to different Firebase projects.
+- Mobile pending query expects different fields/status names (partially handled now with aliases).
+- Firestore rules/index prevent mobile read.
+- Mobile filters by exact status/field that does not match query expectation.
+
+6) Exact Verification Steps
+1. Create a brand-new booking from web.
+2. Open Firebase Console immediately and confirm the document appears in bookings/.
+3. Open mobile admin Pending within 1-2 minutes (before expiry).
+4. Confirm mobile app google-services.json project_id matches web projectId.
+5. If still not visible, inspect mobile query code (collection name + where clauses + status key).
+
+7) Prompt To Share With ChatGPT
+You can paste this:
+
+"I have a web app and Android app using Firebase Firestore. Web writes booking docs to `bookings` with these fields:
+bookingId/id, userId/uid, phaseId/phase/phaseKey, status/requestStatus/bookingStatus, phoneNumber/phone, whatsappNumber/whatsapp, createdAt/createdAtMs, updatedAt/updatedAtMs, expiresAt, phaseCanonicalId/phaseLegacyId/phaseIdAliases, userName/name, userEmail/email, source='web'.
+Mobile admin pending screen still shows empty. Please help me design a robust Firestore query + parser strategy that supports both legacy and new field names and handles expiry correctly."
+

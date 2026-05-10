@@ -1,0 +1,387 @@
+You are upgrading an existing static Firebase-based web application into a fully synchronized web platform that mirrors the behavior, progression system, learning flow, and moderation workflow of the existing Android application for:
+
+"Shapla Chottor AI Research Lab"
+
+IMPORTANT:
+This is NOT a greenfield project.
+Do NOT redesign the business logic.
+Do NOT invent new schemas.
+Do NOT create alternative progression systems.
+Do NOT simplify the educational workflow.
+
+The Android app is the canonical product implementation.
+The web app must evolve into a synchronized frontend extension of that ecosystem.
+
+====================================================
+CORE PRODUCT UNDERSTANDING
+====================================================
+
+This platform is:
+
+- an AI-assisted systems engineering learning platform
+- a progression-based mentorship ecosystem
+- a gated cohort learning system
+- a teacher-reviewed classroom progression platform
+- a referral-driven educational product
+- a structured educational journey
+
+The learning philosophy is intentional:
+
+Phase 1 → AI prompting and logic thinking
+Phase 2 → Data analysis
+Phase 3 → Software engineering
+Phase 4 → System architecture
+Phase 5 → Reliability and consistency
+Phase 6 → Production engineering
+
+The educational progression itself is part of the product identity.
+
+====================================================
+IMPORTANT ARCHITECTURAL RULES
+====================================================
+
+The Android app already contains:
+
+- canonical business rules
+- progression logic
+- booking lifecycle rules
+- feature unlock thresholds
+- educational pacing
+- lesson sequencing
+- progression repair logic
+- referral workflows
+- admin moderation lifecycle
+
+The web app MUST FOLLOW those contracts.
+
+DO NOT:
+- invent new Firestore fields
+- change booking lifecycle names
+- create alternate progression calculations
+- bypass sequential lesson logic
+- create a different unlock strategy
+- redesign admin moderation flow
+
+====================================================
+CURRENT WEB APP STATE
+====================================================
+
+The existing web app currently includes:
+
+- Google login
+- Firestore integration
+- booking request system
+- phase progression UI
+- admin moderation panel
+- pending/approved/rejected/cancelled states
+- Android-compatible booking documents
+- lightweight progression gating
+- voice notification support
+- Meta Pixel integration
+
+Current architecture:
+- Vanilla JavaScript
+- HTML
+- CSS
+- Firebase Web SDK
+- Firestore
+- Static hosting
+
+Current problem:
+The web app only partially mirrors the Android app.
+
+It does NOT yet include:
+- lesson system
+- classroom flow
+- lesson progression
+- content rendering
+- reflection workflow
+- educational pacing
+- My Learning experience
+- advanced unlock experience
+- progression psychology
+- full account management parity
+
+====================================================
+GOAL
+====================================================
+
+Upgrade the web app into a synchronized learning platform that matches the Android app user flow and product behavior.
+
+The final web app should preserve:
+- same progression philosophy
+- same educational pacing
+- same classroom logic
+- same admin approval flow
+- same Firestore contract
+- same unlock psychology
+- same lesson sequencing
+- same account deletion behavior
+- same referral ecosystem
+- same feature gating behavior
+
+====================================================
+CRITICAL BACKEND STRATEGY
+====================================================
+
+IMPORTANT:
+The system is simple.
+
+This is NOT a massive enterprise backend.
+
+It is fundamentally:
+- a student approval system
+- a classroom progression system
+- a gated educational flow
+
+Do NOT overengineer.
+
+However:
+critical lifecycle logic must move away from duplicated client-side implementations.
+
+Build lightweight backend authority using:
+
+- Firebase Cloud Functions
+OR
+- minimal secure API endpoints
+
+for ONLY critical flows:
+
+1. booking creation
+2. booking approval
+3. booking rejection
+4. booking cancellation
+5. booking expiration cleanup
+6. unlockedPhases updates
+7. bookedSeats consistency
+8. admin authorization validation
+9. account deletion orchestration
+
+The backend should remain lightweight and Firebase-native.
+
+====================================================
+ANDROID DATA CONTRACTS (MUST MATCH)
+====================================================
+
+Firestore Collections:
+
+users
+phases
+bookings
+referralEvents
+affiliateStats
+
+Booking document format:
+
+bookings/{userId}_{phaseId}
+
+Required canonical fields:
+- bookingId
+- userId
+- phaseId
+- whatsappNumber
+- createdAt
+- expiresAt
+- status
+
+Canonical status lifecycle:
+- pending
+- reviewing
+- approved
+- rejected
+- cancelled
+- expired
+
+Legacy aliases may still exist for compatibility.
+
+====================================================
+PROGRESSION RULES
+====================================================
+
+Users MUST:
+- complete lessons sequentially
+- finish previous phases before requesting next phase
+- wait for teacher approval before entering premium phases
+
+Do NOT allow:
+- lesson skipping
+- arbitrary unlocks
+- direct classroom access without approval
+
+====================================================
+LESSON SYSTEM
+====================================================
+
+The Android app uses structured lesson blocks:
+
+- Concept
+- Example
+- Exercise
+- Reflection
+
+The web app must support:
+- classroom rendering
+- lesson detail pages
+- lesson completion
+- sequential gating
+- progress indicators
+- reflection sections
+- learning continuity
+
+Lessons are currently hardcoded in provider classes on Android.
+
+Design the web architecture so that:
+- lesson rendering is modular
+- lesson contracts match Android structures
+- future CMS migration remains possible
+
+====================================================
+FEATURE GATING
+====================================================
+
+Advanced features unlock based on progress:
+
+>=30%
+- tradingBot
+
+>=60%
+- investment
+
+100%
+- affiliate
+
+The web app must preserve these gates visually and functionally.
+
+====================================================
+USER FLOW (VERY IMPORTANT)
+====================================================
+
+The web app should mirror Android user flow:
+
+1. User installs/opens web app
+2. Login with Google
+3. Create/update profile
+4. Explore phases
+5. Start Phase 1 immediately
+6. Complete lessons sequentially
+7. Reach 100% phase completion
+8. Request next phase access
+9. Enter WhatsApp number
+10. Wait for teacher review
+11. Admin reviews request
+12. Admin approves/rejects
+13. User receives updated unlocked classroom
+14. Continue progression
+15. Unlock advanced ecosystem features
+16. Access referral/affiliate system
+17. Optionally delete account permanently
+
+====================================================
+ACCOUNT DELETION
+====================================================
+
+VERY IMPORTANT:
+The Android app already supports full account deletion.
+
+The web app MUST support the same privacy-respecting behavior.
+
+When user deletes account:
+- delete Firestore user document
+- delete bookings
+- delete affiliate stats
+- delete referral events
+- delete progress subcollections
+- delete auth account
+
+The flow must be:
+- explicit
+- irreversible
+- privacy-friendly
+- synchronized with mobile behavior
+
+====================================================
+ADMIN PANEL REQUIREMENTS
+====================================================
+
+Admin workflow must match Android logic:
+
+Pending
+→ Reviewing
+→ Approved / Rejected
+→ Cancelled / Revoked
+
+Admin abilities:
+- review readiness
+- confirm payment
+- approve classroom access
+- reject requests
+- revoke access
+- inspect booking history
+
+Do NOT redesign lifecycle naming.
+
+====================================================
+UI/UX GOALS
+====================================================
+
+Preserve:
+- educational atmosphere
+- progression psychology
+- gated advancement feeling
+- mentorship-driven UX
+- structured learning feel
+
+The web app should feel:
+- modern
+- trustworthy
+- progression-oriented
+- educational
+- synchronized with Android identity
+
+====================================================
+TECHNICAL REFACTOR GOALS
+====================================================
+
+Refactor the current web app into a maintainable architecture.
+
+Recommended:
+- modular ES modules
+OR
+- Next.js/React migration
+OR
+- lightweight component architecture
+
+But:
+DO NOT break Firestore compatibility.
+
+====================================================
+EXPECTED OUTPUT
+====================================================
+
+Perform:
+
+1. Full architecture assessment
+2. Detect conflicts between Android and web logic
+3. Preserve canonical Android behavior
+4. Refactor duplicated logic safely
+5. Build synchronized lesson/classroom flow
+6. Add backend authority for critical transitions
+7. Maintain Firestore compatibility
+8. Preserve progression lifecycle
+9. Preserve booking lifecycle
+10. Preserve educational pacing
+11. Add production-safe account deletion
+12. Improve maintainability without rewriting the product philosophy
+
+====================================================
+MOST IMPORTANT RULE
+====================================================
+
+Do NOT treat this as:
+"a new web app."
+
+Treat this as:
+"synchronizing and extending an existing educational ecosystem."
+
+The Android app is the canonical source of truth.
+The web app must evolve into a synchronized counterpart.

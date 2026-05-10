@@ -1,6 +1,6 @@
 # Shapla Chottor AI Research Lab (Web)
 
-This web app uses the same phase + booking contract as the Android app.
+This web app is a synchronized counterpart to the Android app. It preserves Android booking contracts, progression pacing, and moderation lifecycle while adding classroom lesson flow on web.
 
 ## Canonical Phase Catalog
 
@@ -18,6 +18,9 @@ The UI always supports this 6-phase flow (Firestore `phases` can override detail
 - `users`
 - `phases`
 - `bookings`
+- `referralEvents`
+- `affiliateStats`
+- `users/{uid}/progress/{phaseId}` (lesson progression + reflections)
 
 ## Android Compatibility Contract
 
@@ -40,6 +43,7 @@ Required primary fields (must exist and be correct):
 Status values are lowercase only:
 
 - `pending`
+- `reviewing`
 - `approved`
 - `rejected`
 - `cancelled`
@@ -86,16 +90,28 @@ Notes:
 
 - `phaseId` is canonical (`phase1`, not `phase_1`).
 - Alias fields are still written for backward compatibility (`id`, `uid`, `phase`, `phaseKey`, `requestStatus`, `bookingStatus`).
-- Web admin pending view is intentionally aligned with Android behavior: pending means `status == "pending"` (and not expired by local effective-status check).
+- Web moderation queue includes `pending` and `reviewing` (excluding expired records).
+
+## Learning + Progression
+
+- Phase 1 classroom is available immediately after login.
+- Lessons are sequential and block-based: `Concept -> Example -> Exercise -> Reflection`.
+- Learners cannot skip lessons inside a phase.
+- Booking requests for next phase require completion of previous phase lessons.
+- Feature gates follow progression:
+  - `>=30%` -> `tradingBot`
+  - `>=60%` -> `investment`
+  - `100%` -> `affiliate`
 
 ## User Booking Behavior
 
 - Google login is required.
-- User must provide `phoneNumber` and `whatsappNumber`.
+- User provides only `whatsappNumber` in the web form.
+- For Android compatibility, web writes both `whatsappNumber` and `phoneNumber` using that same value.
 - Booking is allowed only when:
-  - previous phase prerequisite is satisfied,
+  - previous phase lesson prerequisite is satisfied,
   - phase has available seats,
-  - no active pending/approved booking exists for that phase.
+  - no active pending/reviewing/approved booking exists for that phase.
 - Pending booking window is 15 minutes (`createdAt` + 15 min).
 
 ## Admin Behavior
@@ -106,11 +122,13 @@ Admin email in web app:
 
 Admin tabs:
 
-- `Pending`: approve/reject pending requests
+- `Pending`: process pending/reviewing requests
 - `All Bookings`: inspect all statuses and cancel approved bookings
 
 Actions:
 
+- **Move to Reviewing**
+  - booking `status` -> `reviewing`
 - **Approve**
   - booking `status` -> `approved`
   - phase `bookedSeats` +1
@@ -121,6 +139,30 @@ Actions:
   - booking `status` -> `cancelled`
   - phase `bookedSeats` -1 (not below 0)
   - user `unlockedPhases` `arrayRemove(phaseId)`
+
+## Backend Authority (Cloud Functions)
+
+`functions/index.js` contains callable/scheduled authority for critical lifecycle logic:
+
+- `createBooking`
+- `markBookingReviewing`
+- `approveBooking`
+- `rejectBooking`
+- `cancelBooking`
+- `expireStaleBookingsScheduled` (every 5 minutes)
+- `expireStaleBookingsNow`
+- `reconcileBookingConsistency`
+- `deleteAccountCascade`
+
+## Deployment
+
+1. Install dependencies:
+   - `cd functions`
+   - `npm install`
+2. Deploy functions:
+   - `npm run deploy`
+3. Deploy security rules + hosting (from repo root):
+   - `firebase deploy --only firestore:rules,functions,hosting`
 
 ## Privacy Policy
 

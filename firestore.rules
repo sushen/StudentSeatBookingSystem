@@ -1,0 +1,73 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.admin == true ||
+        request.auth.token.email in [
+          "sushen.biswas.aga@gmail.com",
+          "sushen.biswas.aga@googlemail.com"
+        ]
+      );
+    }
+
+    match /phases/{phaseId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /bookings/{bookingId} {
+      allow read: if isSignedIn() && (
+        resource.data.userId == request.auth.uid ||
+        isAdmin()
+      );
+      allow write: if false;
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create, update: if isOwner(userId);
+      allow delete: if false;
+
+      match /progress/{phaseId} {
+        allow read, write: if isOwner(userId) || isAdmin();
+      }
+    }
+
+    match /referralEvents/{eventId} {
+      allow read: if isAdmin() || (isSignedIn() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.referrerId == request.auth.uid
+      ));
+      allow create, update: if isAdmin() || (isSignedIn() && (
+        request.resource.data.userId == request.auth.uid ||
+        request.resource.data.referrerId == request.auth.uid
+      ));
+      allow delete: if false;
+    }
+
+    match /affiliateStats/{affiliateId} {
+      allow read: if isAdmin() || (isSignedIn() && (
+        affiliateId == request.auth.uid ||
+        resource.data.userId == request.auth.uid
+      ));
+      allow create, update: if isAdmin() || (isSignedIn() && (
+        affiliateId == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid
+      ));
+      allow delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
