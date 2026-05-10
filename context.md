@@ -1,102 +1,139 @@
 # context.md
 
 ## Project Summary
-This project is a static single-page phase booking system for **Shapla Chottor AI Research Lab**. Learners request access to phases, admins approve/reject requests, and approved phases unlock progression.
+This project is a Firebase-backed web learning and seat-booking system for Shapla Chottor Lab, designed to stay data-compatible with a mobile app that reads/writes the same Firestore collections.
 
-The system is intentionally aligned with the Android app data contract so web-created bookings can be read in the Android admin pending tab without Android-side changes.
+Primary workflow:
+1. User signs in with Google.
+2. User completes phase lessons (with reflections) in sequence.
+3. User requests seat access for next phases.
+4. Admin reviews/approves/rejects/cancels bookings.
+5. Booking lifecycle and seat counts are reconciled by Cloud Functions and scheduled expiry jobs.
+
+The system solves synchronized progression + moderation across web/mobile with shared booking contracts.
 
 ## Tech Stack
-- **Frontend:** Vanilla JavaScript (ES modules), HTML, CSS
-- **Backend services used:** Firebase Authentication (Google) and Cloud Firestore
-- **SDK loading:** Firebase Web SDK v10.12.5 imported dynamically from Google CDN at runtime
-- **Browser APIs:** SpeechSynthesis, Clipboard API, popup auth flow
-- **External integration:** Meta Pixel script in `index.html`
-- **Deployment model:** Static hosting (no backend code in this repo)
+- Frontend: Vanilla JavaScript (ES modules), HTML, CSS (`index.html`, `app.js`, `style.css`)
+- Backend: Firebase Cloud Functions v2 (Node 20, ESM) in `functions/index.js`
+- Data/Auth: Firestore + Firebase Auth (Google sign-in)
+- Hosting: Firebase Hosting SPA rewrite (`firebase.json`)
+- Rules: Firestore Security Rules in `firestore.rules`
+- Browser APIs: `SpeechSynthesis`, Clipboard API, dynamic module imports
+- External script: Meta Pixel in `index.html`
 
 ## Architecture
-- `index.html`: Main UI shell (auth controls, profile, phase cards, admin table, modals)
-- `app.js`: Core app controller (state, auth, Firestore subscriptions/writes, transactions, rendering, admin actions)
-- `inAppBrowserDetection.js`: In-app browser detection and guidance/intent URL generation
-- `sound-engine/soundEngine.js`: Voice notification engine
-- `sound-engine/bookingNotificationUtils.js`: Detects new pending bookings for voice alerts
+- `app.js`: single runtime controller with:
+  - global state object
+  - render functions per panel
+  - Firestore listeners
+  - booking/admin actions
+  - learning progression persistence
+- `learning/lessonCatalog.js`: static phase->lesson content and blocks
+- `learning/progression.js`: shared progression math and feature gate thresholds
+- `inAppBrowserDetection.js`: OAuth-hostile in-app browser detection + handoff guidance
+- `sound-engine/*`: admin voice alerts for newly pending bookings
+- `functions/index.js`: authoritative lifecycle mutations, expiry sweep, reconciliation, delete cascade
 
-Architecture is client-heavy: business rules and privileged transitions are executed in browser code with Firestore transactions for consistency.
+State management is client-local (no framework store): `state` + explicit `render*()` calls after each mutation/listener update.
 
 ## Features Implemented
-- Google sign-in/sign-out with popup auth.
-- In-app browser guard for OAuth-blocked environments (Messenger/Instagram/WebView patterns).
-- User profile capture and update (`phoneNumber`, `whatsappNumber`).
-- Fixed 6-phase catalog with Firestore override support (`phases` collection), including legacy phase ID normalization (`phase_1` -> `phase1`).
-- Progressive phase unlock rules (must complete previous phase path).
-- Booking request transaction:
-  - checks phase capacity,
-  - blocks duplicate active pending/approved request,
-  - writes booking to `bookings/{userId}_{phaseId}`.
-- Booking expiry window of 15 minutes (`createdAt` + 15 minutes), treated as effective `expired` in UI/admin logic.
-- Admin panel with tabs:
-  - `Pending`: actionable pending-only rows
-  - `All Bookings`: historical/all statuses
-- Admin actions:
-  - approve pending booking (`approved`) and increment `phases.bookedSeats`
-  - reject pending booking (`rejected`)
-  - cancel approved booking (`cancelled`) and decrement `phases.bookedSeats`
-  - update `users.unlockedPhases` on approve/cancel
-- Voice alert for newly pending bookings (admin-only mode).
+- Google login/logout with popup first, redirect fallback.
+- In-app browser guard (Facebook/Messenger/Instagram/WebView heuristics) with "open in browser" guidance.
+- Auth landing + signed-in app shell with section navigation (home, overview, learning, classroom, features, profile, admin).
+- 6 canonical phases with Firestore override and legacy phase ID normalization (`phase_1` -> `phase1`).
+- Learning classroom:
+  - phase tabs
+  - sequential lesson unlock
+  - required reflection before completion
+  - per-phase progress at `users/{uid}/progress/{phaseId}`
+- Progress-based feature gates:
+  - `tradingBot` at 30%
+  - `investment` at 60%
+  - `affiliate` at 100%
+- Booking request flow:
+  - validates previous phase completion
+  - checks capacity
+  - creates `bookings/{uid_phaseId}` payload with canonical + alias fields
+- Admin moderation UI:
+  - Pending/All tabs
+  - move to reviewing, approve, reject, cancel seat
+- Account deletion UI using callable `deleteAccountCascade`.
+- Admin voice notifications for new pending bookings.
 
 ## Data Model
-### Firestore Collections
 - `users/{uid}`
-  - `name`, `email`
-  - `phone`, `phoneNumber`, `whatsappNumber`
-  - `progress` (number)
-  - `unlockedPhases` (string[])
-  - `completedPhases` (string[])
-  - `createdAt`, `updatedAt` (timestamps)
-
+  - profile: `name`, `email`, `phone`, `phoneNumber`, `whatsappNumber`
+  - progression summary: `progress`, `completedPhases[]`, `unlockedPhases[]`
+  - optional referral/invite display fields (read only in UI if present)
+- `users/{uid}/progress/{phaseId}`
+  - `phaseId`, `completedLessonIds` (and alias `completedLessons`)
+  - `reflections` map by `lessonId`
+  - `completedCount`, `totalLessons`, `progressPercent`, `lastCompletedLessonId`, `updatedAt`
 - `phases/{phaseId}`
-  - `phaseId`, `title`, `description`, `level`, `order`
-  - `totalSeats`, `bookedSeats`
+  - `phaseId`, `title`, `description`, `level`, `order`, `totalSeats`, `bookedSeats`
+- `bookings/{bookingId}` where `bookingId = ${userId}_${canonicalPhaseId}`
+  - canonical fields: `bookingId`, `userId`, `phaseId`, `phoneNumber`, `whatsappNumber`, `status`, `createdAt`, `expiresAt`
+  - compatibility aliases: `id`, `uid`, `phase`, `phaseKey`, `requestStatus`, `bookingStatus`, `phone`, `whatsapp`, `phaseCanonicalId`, `phaseLegacyId`, `phaseIdAliases`
+  - audit fields for moderation state changes (`approvedBy`, `rejectedBy`, etc.)
+- `referralEvents/{eventId}`, `affiliateStats/{affiliateId}` (rules + delete cascade support exist; no full web workflow implemented)
 
-- `bookings/{bookingId}` where `bookingId = "${userId}_${phaseId}"`
-  - **Primary Android-compatible fields:** `bookingId`, `userId`, `phaseId`, `phoneNumber`, `whatsappNumber`, `createdAt`, `expiresAt`, `status`
-  - **Status enum:** `pending | approved | rejected | cancelled | expired`
-  - **Alias/backward-compat fields:** `id`, `uid`, `phase`, `phaseKey`, `requestStatus`, `bookingStatus`, etc.
-  - **Time fields for compatibility:** `createdAtMs`, `expiresAtMs`, `updatedAtMs` plus mirrored `createdAt`, `expiresAt`, `updatedAt` numeric epoch-ms values
-
-### State Transitions
-- `pending` -> `approved` (admin approve)
-- `pending` -> `rejected` (admin reject)
-- `approved` -> `cancelled` (admin cancel)
-- `pending` -> effective `expired` when current time exceeds `expiresAt`
+Cross-platform contract assumptions in code:
+- Status values are lowercase: `pending`, `reviewing`, `approved`, `rejected`, `cancelled`, `expired`
+- Pending window is 15 minutes (`expiresAt = createdAt + 15m`)
+- Canonical phase IDs are `phase1..phase6`; legacy aliases are still read/written.
 
 ## Core Logic
-- `canonicalizePhaseId()` maps legacy IDs to canonical IDs.
-- `normalizeBookingDoc()` reads both canonical and alias fields.
-- `requestBookingForPhase()` performs transaction-safe creation and writes Android-compatible booking payload.
-- `subscribeToUserBookings()` uses `where("userId", "==", uid)`.
-- `subscribeToAdminPendingBookings()` listens to `bookings` and only includes rows where raw `status === "pending"` and not effectively expired.
-- Admin approve/cancel flows update both booking document status and phase/user aggregate counters.
+- Security boundary:
+  - Firestore rules deny all direct writes to `bookings` and `phases`.
+  - Booking lifecycle authority is in callable/scheduled functions.
+- Callable functions:
+  - `createBooking`, `markBookingReviewing`, `approveBooking`, `rejectBooking`, `cancelBooking`
+  - `expireStaleBookingsScheduled` (every 5 min), `expireStaleBookingsNow`
+  - `reconcileBookingConsistency`
+  - `deleteAccountCascade`
+- Transactional boundaries:
+  - approve/cancel mutate booking + phase seats + user unlocked phases atomically.
+  - createBooking enforces prerequisite + active lifecycle checks atomically.
+- Listener boundaries in web:
+  - global phases subscription after Firebase init
+  - user-scoped profile/bookings/progress subscriptions on auth
+  - admin full-bookings subscription on admin auth
+- Expiry behavior:
+  - backend sweep persists `expired` status for stale pending/reviewing docs.
+  - frontend also computes effective expiry from `expiresAt` for UI safety.
 
 ## Limitations
-- Admin authorization is client-side email matching (no server-enforced role in repo).
-- Critical booking transitions are executed from frontend code.
-- Firestore rules are not versioned in this repository.
-- Firebase config and admin email are hardcoded in client source.
-- Admin subscription currently listens to entire `bookings` collection, then filters client-side.
-- Expiry is computed in client/UI logic, not guaranteed by backend mutation.
-- No automated tests or CI.
+- `users/{uid}` writes are owner-allowed with no field-level validation; client can self-edit `completedPhases`/`unlockedPhases`, and backend `createBooking` currently trusts `completedPhases`.
+- Web fallback client transactions for booking/admin actions remain in `app.js` but are effectively blocked by current Firestore rules (`bookings/phases` write=false).
+- Admin read path subscribes to entire `bookings` collection then filters client-side (scalability risk).
+- Frontend admin detection is email-based only; users with only custom claim admin (different email) may pass backend checks but not get admin UI.
+- Legacy doc compatibility is partial:
+  - user booking query uses `where("userId","==",uid)`; docs with only `uid` are missed.
+  - security rule for booking reads checks `resource.data.userId`; uid-only legacy docs are inaccessible to owners.
+  - account delete cascade queries bookings by `userId`; uid-only docs can be orphaned.
+- Canonical phase metadata differs between frontend and Cloud Functions for phases 3-5 titles/descriptions.
+- No automated tests/CI, no migration scripts, no explicit index definitions in repo.
 
 ## Missing / TODO
-- Move privileged transitions to trusted backend (Cloud Functions/Run).
-- Enforce role-based access with Firebase custom claims and strict Firestore rules.
-- Add query/index strategy for scalable admin pending retrieval.
-- Add migration tooling for legacy booking docs created before schema alignment.
-- Add automated tests for race conditions and cross-platform schema compatibility.
-- Externalize environment-specific Firebase configuration.
+- No complete web referral/affiliate product flow (UI shows placeholders; no end-to-end creation/reporting logic).
+- Notifications setting row in profile has no implemented behavior.
+- No role management UI or admin claim provisioning flow.
+- No observability dashboard/alerts for callable failures, expiry sweep health, or reconciliation drift.
+- No explicit anti-abuse/rate limiting for high-frequency callable invocation.
+- No formal schema versioning/migration pipeline for legacy bookings.
 
 ## Recommended Next Steps
-1. Build backend endpoints/functions for booking create/approve/reject/cancel with authoritative validation.
-2. Lock down Firestore rules so clients cannot perform unauthorized state transitions.
-3. Add a one-time migration to backfill old web booking docs missing canonical Android fields (`status`, `phaseId`, `bookingId`, numeric `createdAt`/`expiresAt`).
-4. Replace full-collection admin listeners with indexed server-side query strategy where possible.
-5. Add integration tests that validate web-created bookings are visible in Android pending query (`status == "pending"`).
+1. Enforce progression server-side from authoritative progress docs:
+   - derive prerequisites from `users/{uid}/progress/*` instead of trusting `users.completedPhases`.
+2. Harden user profile writes in Firestore rules:
+   - restrict owner-writable fields; block direct owner edits to privileged aggregates (`unlockedPhases`, potentially `completedPhases`).
+3. Unify shared schema constants across web + functions:
+   - phase catalog metadata, status constants, canonical field names in one shared source or generated contract.
+4. Add legacy-data migration + cleanup:
+   - backfill `userId` from `uid`, canonical `phaseId`, normalized status/timestamps, and alias parity.
+5. Replace admin full-collection listen with indexed server queries/pagination:
+   - pending/reviewing feed + historical feed with bounded windows.
+6. Add automated tests:
+   - callable lifecycle tests, rules tests, contract-parity tests for web/mobile booking payloads.
+7. Add operational controls:
+   - callable telemetry, sweep/reconciliation monitoring, and runbooks for drift and orphan cleanup.
