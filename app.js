@@ -144,14 +144,17 @@ let signInWithPopupFn = null;
 let signInWithRedirectFn = null;
 let getRedirectResultFn = null;
 let signOutFn = null;
+let deleteAuthUserFn = null;
 
 let collectionFn = null;
 let queryFn = null;
 let whereFn = null;
 let onSnapshotFn = null;
+let getDocsFn = null;
 let runTransactionFn = null;
 let docFn = null;
 let setDocFn = null;
+let deleteDocFn = null;
 let serverTimestampFn = null;
 let arrayUnionFn = null;
 let arrayRemoveFn = null;
@@ -182,6 +185,7 @@ const elements = {
   learningSummaryTrack: document.getElementById("learningSummaryTrack"),
   learningSummaryPhase: document.getElementById("learningSummaryPhase"),
   learningSummaryOverall: document.getElementById("learningSummaryOverall"),
+  referralCodeInput: document.getElementById("referralCodeInput"),
   phaseFilterButtons: Array.from(document.querySelectorAll("[data-phase-filter]")),
   phaseList: document.getElementById("phaseList"),
   messageBox: document.getElementById("messageBox"),
@@ -262,6 +266,9 @@ const state = {
   profile: null,
   userDocExists: false,
   pendingPhaseId: null,
+  pendingReferralCode: "",
+  referralApplyAttempted: false,
+  referralApplyInFlight: false,
   phases: buildFallbackPhaseList(),
   userBookingsByPhaseId: new Map(),
   selectedPhaseTrack: PHASE_TRACK_BEGINNER,
@@ -273,6 +280,8 @@ const state = {
   selectedLearningPhaseId: "phase1",
   selectedLessonId: "",
   learningProgressByPhaseId: new Map(),
+  affiliateStats: null,
+  affiliateStatsUnsubscribe: null,
   learningProgressUnsubscribe: null,
   callablesReady: false,
   firebaseReady: false,
@@ -450,8 +459,13 @@ function applyBrowserEnvironmentGuard() {
 }
 
 function isPermissionDeniedError(error) {
+  const code = String(error?.code || "").toLowerCase();
   const message = String(error?.message || "").toLowerCase();
-  return error?.code === "permission-denied" || message.includes("missing or insufficient permissions");
+  return (
+    code === "permission-denied" ||
+    code.endsWith("permission-denied") ||
+    message.includes("missing or insufficient permissions")
+  );
 }
 
 function getLoginErrorMessage(error) {
@@ -531,6 +545,19 @@ function normalizeString(value) {
 
 function normalizeEmail(value) {
   return normalizeString(value).toLowerCase();
+}
+
+function normalizeReferralCode(value) {
+  const normalized = normalizeString(value).replace(/[^a-z0-9]/gi, "").toUpperCase();
+  return normalized.slice(0, 6);
+}
+
+function buildReferralCodeFromUid(uid) {
+  const normalizedUid = normalizeString(uid).replace(/[^a-z0-9]/gi, "").toUpperCase();
+  if (!normalizedUid) {
+    return "";
+  }
+  return normalizedUid.slice(-6).padStart(6, "X");
 }
 
 function isAdminEmail(value) {
@@ -637,9 +664,14 @@ function mergeWithCanonicalPhases(phasesFromFirestore) {
 }
 
 function normalizeUserProfile(authUser, data = {}) {
-  const phoneFromDoc = normalizeString(data.phone);
-  const phoneNumber = normalizeString(data.phoneNumber) || phoneFromDoc;
-  const whatsappNumber = normalizeString(data.whatsappNumber) || phoneFromDoc;
+  const phone = normalizeString(data.phone);
+  const phoneNumberRaw = normalizeString(data.phoneNumber);
+  const whatsappRaw = normalizeString(data.whatsapp);
+  const whatsappNumberRaw = normalizeString(data.whatsappNumber);
+  const resolvedPhoneNumber = phoneNumberRaw || whatsappNumberRaw || whatsappRaw || phone;
+  const resolvedWhatsappNumber = whatsappNumberRaw || whatsappRaw || phoneNumberRaw || phone;
+  const referralCode = normalizeReferralCode(data.referralCode || data.referral) || buildReferralCodeFromUid(authUser?.uid || "");
+  const referredBy = normalizeString(data.referredBy);
   const unlockedPhases = Array.from(
     new Set(normalizeStringArray(data.unlockedPhases).map(canonicalizePhaseId).filter(Boolean))
   );
@@ -650,12 +682,24 @@ function normalizeUserProfile(authUser, data = {}) {
   return {
     name: normalizeString(data.name) || authUser?.displayName || "Unknown User",
     email: normalizeString(data.email) || authUser?.email || "",
-    phone: phoneFromDoc || whatsappNumber || "",
-    phoneNumber,
-    whatsappNumber,
+    phone: phone || resolvedWhatsappNumber || resolvedPhoneNumber || "",
+    phoneNumber: resolvedPhoneNumber,
+    whatsappNumber: resolvedWhatsappNumber,
+    referralCode,
+    referredBy,
     progress: typeof data.progress === "number" ? data.progress : 0,
     unlockedPhases,
     completedPhases
+  };
+}
+
+function normalizeAffiliateStats(data = {}) {
+  const invitesRaw = Number(data.totalInvites ?? data.invites ?? 0);
+  const conversionsRaw = Number(data.conversions ?? data.totalConversions ?? data.converted ?? 0);
+
+  return {
+    totalInvites: Math.max(0, Number.isFinite(invitesRaw) ? Math.floor(invitesRaw) : 0),
+    conversions: Math.max(0, Number.isFinite(conversionsRaw) ? Math.floor(conversionsRaw) : 0)
   };
 }
 
@@ -730,16 +774,15 @@ function normalizeBookingDoc(docId, data = {}) {
 
 function normalizeLearningProgressDoc(docId, data = {}) {
   const phaseId = canonicalizePhaseId(data.phaseId || docId);
-  const completedLessonIds = normalizeLessonIdArray(
+  const normalizedLessonIds = normalizeLessonIdArray(
     Array.isArray(data.completedLessonIds) ? data.completedLessonIds : data.completedLessons
   );
+  const completedLessonIds = canonicalizeCompletedLessonIds(phaseId, normalizedLessonIds);
   const reflections = typeof data.reflections === "object" && data.reflections !== null
     ? { ...data.reflections }
     : {};
   const lessonCount = getLessonCountForPhase(phaseId);
-  const progressPercent = typeof data.progressPercent === "number"
-    ? Math.max(0, Math.min(100, data.progressPercent))
-    : toProgressPercent(completedLessonIds.length, lessonCount);
+  const progressPercent = toProgressPercent(completedLessonIds.length, lessonCount);
 
   return {
     phaseId,
@@ -749,6 +792,25 @@ function normalizeLearningProgressDoc(docId, data = {}) {
     progressPercent,
     updatedAtMs: timestampToMillis(data.updatedAt)
   };
+}
+
+function canonicalizeCompletedLessonIds(phaseId, lessonIds) {
+  const orderedLessonIds = getLessonsForPhase(phaseId).map((lesson) => lesson.lessonId);
+  if (orderedLessonIds.length === 0) {
+    return [];
+  }
+
+  const lessonIdSet = new Set(lessonIds);
+  const contiguousPrefix = [];
+
+  for (const lessonId of orderedLessonIds) {
+    if (!lessonIdSet.has(lessonId)) {
+      break;
+    }
+    contiguousPrefix.push(lessonId);
+  }
+
+  return contiguousPrefix;
 }
 
 function sortPhaseList(phases) {
@@ -773,20 +835,86 @@ function formatDateTime(ms) {
 
 function formatRemainingWindow(durationMs) {
   if (!Number.isFinite(durationMs) || durationMs <= 0) {
-    return "0m";
+    return "00:00";
   }
 
-  const totalMinutes = Math.ceil(durationMs / 60000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
 
   if (hours <= 0) {
-    return `${minutes}m`;
+    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   }
-  if (minutes === 0) {
-    return `${hours}h`;
+  return `${hours}h ${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+function buildPendingBookingStatusText(booking, nowMs = Date.now()) {
+  const remainingMs = Number(booking?.expiresAtMs || 0) - nowMs;
+
+  if (booking?.status === BOOKING_STATUS_REVIEWING) {
+    if (booking?.expiresAtMs && remainingMs > 0) {
+      return `Under teacher review. Approval window: ${formatRemainingWindow(remainingMs)} remaining.`;
+    }
+    return "Your request is under teacher review.";
   }
-  return `${hours}h ${minutes}m`;
+
+  if (booking?.expiresAtMs && remainingMs > 0) {
+    return `Waiting for approval. Booking window: ${formatRemainingWindow(remainingMs)} remaining.`;
+  }
+  return "Waiting for admin approval.";
+}
+
+function annotatePendingBookingStatusCountdown(statusElement, phaseState, booking) {
+  if (!statusElement) {
+    return;
+  }
+
+  if (phaseState !== PHASE_STATE_PENDING || !Number.isFinite(Number(booking?.expiresAtMs || 0))) {
+    statusElement.removeAttribute("data-countdown-kind");
+    statusElement.removeAttribute("data-countdown-expires-at-ms");
+    return;
+  }
+
+  statusElement.dataset.countdownKind =
+    booking?.status === BOOKING_STATUS_REVIEWING ? BOOKING_STATUS_REVIEWING : BOOKING_STATUS_PENDING;
+  statusElement.dataset.countdownExpiresAtMs = String(Number(booking.expiresAtMs));
+}
+
+function refreshPendingBookingCountdowns() {
+  const countdownElements = document.querySelectorAll(".phase-status-text[data-countdown-expires-at-ms]");
+  if (!countdownElements.length) {
+    return;
+  }
+
+  const nowMs = Date.now();
+  let shouldRerenderPhases = false;
+
+  countdownElements.forEach((element) => {
+    const expiresAtMs = Number(element.dataset.countdownExpiresAtMs || 0);
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= 0) {
+      return;
+    }
+
+    const isReviewing = element.dataset.countdownKind === BOOKING_STATUS_REVIEWING;
+    const remainingMs = expiresAtMs - nowMs;
+
+    if (remainingMs > 0) {
+      const remainingText = formatRemainingWindow(remainingMs);
+      element.textContent = isReviewing
+        ? `Under teacher review. Approval window: ${remainingText} remaining.`
+        : `Waiting for approval. Booking window: ${remainingText} remaining.`;
+      return;
+    }
+
+    element.textContent = isReviewing ? "Your request is under teacher review." : "Waiting for admin approval.";
+    shouldRerenderPhases = true;
+  });
+
+  if (shouldRerenderPhases) {
+    renderPhases();
+    renderWorkspaceNavigation();
+  }
 }
 
 function buildPhaseLifecycleElement(phase, phaseState, booking) {
@@ -800,7 +928,7 @@ function buildPhaseLifecycleElement(phase, phaseState, booking) {
     effectiveStatus === BOOKING_STATUS_EXPIRED;
 
   let activeIndex = -1;
-  if (phaseState === PHASE_STATE_UNLOCKED || effectiveStatus === BOOKING_STATUS_APPROVED || phase.phaseId === "phase1") {
+  if (phaseState === PHASE_STATE_UNLOCKED || effectiveStatus === BOOKING_STATUS_APPROVED) {
     activeIndex = 2;
   } else if (effectiveStatus === BOOKING_STATUS_REVIEWING) {
     activeIndex = 1;
@@ -935,56 +1063,32 @@ function getMissingCompletionPrerequisitePhase(phaseId, completedPhaseSet) {
 
 function isPhaseClassroomAccessible(phaseId, unlockedPhaseSet) {
   const canonicalPhaseId = canonicalizePhaseId(phaseId);
-  if (canonicalPhaseId === "phase1") {
-    return true;
-  }
   return unlockedPhaseSet.has(canonicalPhaseId);
 }
 
 function resolvePhaseState(phaseId, unlockedPhaseSet) {
   const canonicalPhaseId = canonicalizePhaseId(phaseId);
-  if (canonicalPhaseId === "phase1") {
-    return { phaseState: PHASE_STATE_UNLOCKED, booking: null };
-  }
-
-  const booking = state.userBookingsByPhaseId.get(phaseId) || null;
+  const booking = state.userBookingsByPhaseId.get(canonicalPhaseId) || null;
   const effectiveStatus = getEffectiveBookingStatus(booking);
 
-  if (unlockedPhaseSet.has(phaseId) || booking?.status === BOOKING_STATUS_APPROVED) {
+  if (unlockedPhaseSet.has(canonicalPhaseId) || booking?.status === BOOKING_STATUS_APPROVED) {
     return { phaseState: PHASE_STATE_UNLOCKED, booking };
   }
-  if (effectiveStatus === BOOKING_STATUS_PENDING || effectiveStatus === BOOKING_STATUS_REVIEWING) {
+  if (booking && (effectiveStatus === BOOKING_STATUS_PENDING || effectiveStatus === BOOKING_STATUS_REVIEWING)) {
     return { phaseState: PHASE_STATE_PENDING, booking };
   }
-  if (effectiveStatus === BOOKING_STATUS_EXPIRED) {
+  if (booking && effectiveStatus === BOOKING_STATUS_EXPIRED) {
     return { phaseState: PHASE_STATE_LOCKED, booking: { ...booking, status: BOOKING_STATUS_EXPIRED } };
   }
   return { phaseState: PHASE_STATE_LOCKED, booking };
 }
 
 function buildPhaseStatusText(phase, phaseState, booking, missingPrerequisitePhase) {
-  if (phase.phaseId === "phase1") {
-    return state.user
-      ? "Teacher approved this classroom. You can enter now."
-      : "Login to open the classroom.";
-  }
   if (phaseState === PHASE_STATE_UNLOCKED) {
     return "Approved and unlocked.";
   }
   if (phaseState === PHASE_STATE_PENDING) {
-    const remainingMs = Number(booking?.expiresAtMs || 0) - Date.now();
-    const remainingText = formatRemainingWindow(remainingMs);
-
-    if (booking?.status === BOOKING_STATUS_REVIEWING) {
-      if (booking?.expiresAtMs && remainingMs > 0) {
-        return `Under teacher review. Approval window: ${remainingText} remaining.`;
-      }
-      return "Your request is under teacher review.";
-    }
-    if (booking?.expiresAtMs && remainingMs > 0) {
-      return `Waiting for approval. Booking window: ${remainingText} remaining.`;
-    }
-    return "Waiting for admin approval.";
+    return buildPendingBookingStatusText(booking);
   }
   if (missingPrerequisitePhase) {
     return `Complete ${missingPrerequisitePhase.title} lessons before requesting this phase.`;
@@ -1055,7 +1159,7 @@ function renderPhases() {
   visiblePhases.forEach((phase) => {
     const { phaseState, booking } = resolvePhaseState(phase.phaseId, unlockedPhaseSet);
     const missingPrerequisitePhase = getMissingCompletionPrerequisitePhase(phase.phaseId, completedPhaseSet);
-    const phaseIsFull = phase.phaseId === "phase1" ? false : isPhaseFull(phase);
+    const phaseIsFull = isPhaseFull(phase);
 
     const card = document.createElement("article");
     card.className = "phase-card";
@@ -1110,16 +1214,13 @@ function renderPhases() {
 
     const meta = document.createElement("p");
     meta.className = "phase-meta";
-    if (phase.phaseId === "phase1") {
-      meta.textContent = "Open classroom access";
-    } else {
-      const availableSeats = Math.max(phase.totalSeats - phase.bookedSeats, 0);
-      meta.textContent = `Seats available: ${availableSeats} / ${phase.totalSeats}`;
-    }
+    const availableSeats = Math.max(phase.totalSeats - phase.bookedSeats, 0);
+    meta.textContent = `Seats available: ${availableSeats} / ${phase.totalSeats}`;
 
     const statusText = document.createElement("p");
     statusText.className = "phase-status-text";
     statusText.textContent = buildPhaseStatusText(phase, phaseState, booking, missingPrerequisitePhase);
+    annotatePendingBookingStatusCountdown(statusText, phaseState, booking);
 
     const lifecycle = buildPhaseLifecycleElement(phase, phaseState, booking);
 
@@ -1176,16 +1277,15 @@ function getPhaseLearningProgress(phaseId) {
 
 function computeOverallProgressFromMap(progressByPhaseId = state.learningProgressByPhaseId) {
   const phaseIds = getLessonCatalogPhaseIds();
-  let totalLessons = 0;
-  let completedLessons = 0;
+  if (phaseIds.length === 0) {
+    return 0;
+  }
 
-  phaseIds.forEach((phaseId) => {
-    const lessonCount = getLessonCountForPhase(phaseId);
-    totalLessons += lessonCount;
-
+  const totalLessons = phaseIds.length * 100;
+  const completedLessons = phaseIds.reduce((sum, phaseId) => {
     const progress = progressByPhaseId.get(phaseId) || getPhaseLearningProgress(phaseId);
-    completedLessons += progress.completedLessonIds.length;
-  });
+    return sum + Math.max(0, Math.min(100, Number(progress.progressPercent) || 0));
+  }, 0);
 
   return toProgressPercent(completedLessons, totalLessons);
 }
@@ -1194,9 +1294,6 @@ function getLearningAccessInfo(phaseId, unlockedPhaseSet, completedPhaseSet) {
   const canonicalPhaseId = canonicalizePhaseId(phaseId);
   if (!state.user) {
     return { accessible: false, reason: "Login required." };
-  }
-  if (canonicalPhaseId === "phase1") {
-    return { accessible: true, reason: "" };
   }
 
   const missingPrerequisitePhase = getMissingCompletionPrerequisitePhase(canonicalPhaseId, completedPhaseSet);
@@ -1702,6 +1799,10 @@ async function completeSelectedLesson() {
         : (state.profile?.completedPhases || [])
     };
 
+    if (phaseId === "phase1" && phaseProgressPercent >= 100) {
+      await maybeMarkReferralConversion();
+    }
+
     showMessage(`Lesson completed: ${lesson.title}`, "success");
     renderLearningPanel();
     renderPhases();
@@ -1722,6 +1823,117 @@ function showDeleteAccountModal() {
 
 function hideDeleteAccountModal() {
   elements.deleteAccountModal.classList.add("hidden");
+}
+
+async function getOwnedDocRefsFromQuery(collectionName, fieldName, userId) {
+  if (!db || !collectionFn || !queryFn || !whereFn || !getDocsFn) {
+    throw new Error("Firestore is not initialized.");
+  }
+
+  try {
+    const result = [];
+    const snapshot = await getDocsFn(
+      queryFn(
+        collectionFn(db, collectionName),
+        whereFn(fieldName, "==", userId)
+      )
+    );
+    snapshot.forEach((docSnap) => {
+      result.push(docSnap.ref);
+    });
+    return result;
+  } catch (error) {
+    if (isPermissionDeniedError(error)) {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function collectClientSideDeletionRefs(userId) {
+  if (!db || !docFn || !collectionFn || !getDocsFn) {
+    throw new Error("Firestore is not initialized.");
+  }
+
+  const refsByPath = new Map();
+  const addRef = (ref) => {
+    if (!ref?.path) {
+      return;
+    }
+    refsByPath.set(ref.path, ref);
+  };
+
+  const [
+    bookingByUserId,
+    bookingByUid,
+    referralByUserId,
+    referralByReferredUserId,
+    referralByReferrerId,
+    affiliateByUserId
+  ] = await Promise.all([
+    getOwnedDocRefsFromQuery("bookings", "userId", userId),
+    getOwnedDocRefsFromQuery("bookings", "uid", userId),
+    getOwnedDocRefsFromQuery("referralEvents", "userId", userId),
+    getOwnedDocRefsFromQuery("referralEvents", "referredUserId", userId),
+    getOwnedDocRefsFromQuery("referralEvents", "referrerId", userId),
+    getOwnedDocRefsFromQuery("affiliateStats", "userId", userId)
+  ]);
+
+  [
+    ...bookingByUserId,
+    ...bookingByUid,
+    ...referralByUserId,
+    ...referralByReferredUserId,
+    ...referralByReferrerId,
+    ...affiliateByUserId
+  ].forEach(addRef);
+
+  try {
+    const progressCollection = collectionFn(db, "users", userId, "progress");
+    const progressDocs = await getDocsFn(progressCollection);
+    for (const progressDoc of progressDocs.docs) {
+      const lessonsCollection = collectionFn(db, "users", userId, "progress", progressDoc.id, "lessons");
+      const lessonDocs = await getDocsFn(lessonsCollection);
+      lessonDocs.forEach((lessonDoc) => {
+        addRef(lessonDoc.ref);
+      });
+      addRef(progressDoc.ref);
+    }
+  } catch (error) {
+    if (!isPermissionDeniedError(error)) {
+      throw error;
+    }
+  }
+
+  addRef(docFn(db, "users", userId));
+  return Array.from(refsByPath.values());
+}
+
+async function deleteAccountClientSide() {
+  if (!state.user) {
+    throw new Error("User not authenticated.");
+  }
+  if (!deleteDocFn || !deleteAuthUserFn) {
+    throw new Error("Firebase delete APIs are not initialized.");
+  }
+
+  const userId = state.user.uid;
+  const refsToDelete = await collectClientSideDeletionRefs(userId);
+  refsToDelete.sort((a, b) => b.path.length - a.path.length);
+
+  for (const ref of refsToDelete) {
+    try {
+      await deleteDocFn(ref);
+    } catch (error) {
+      const message = String(error?.message || "").toLowerCase();
+      if (String(error?.code || "").toLowerCase().includes("not-found") || message.includes("no document to update")) {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  await deleteAuthUserFn(state.user);
 }
 
 async function handleDeleteAccount(event) {
@@ -1747,10 +1959,35 @@ async function handleDeleteAccount(event) {
     showMessage("Account deleted permanently.", "success");
     await handleLogout();
   } catch (error) {
-    if (error?.code === "functions-unavailable") {
-      showMessage("Account deletion service is not available. Deploy Cloud Functions first.", "error");
-    } else {
+    const code = String(error?.code || "").toLowerCase();
+    const shouldFallbackToClientDelete =
+      code === "functions-unavailable" ||
+      code.includes("internal") ||
+      code.includes("unavailable") ||
+      code.includes("deadline-exceeded") ||
+      code.includes("unknown");
+
+    if (!shouldFallbackToClientDelete) {
       showMessage(`Account deletion failed: ${error.message}`, "error");
+      return;
+    }
+
+    try {
+      showMessage("Server delete unavailable. Retrying with client-side secure deletion...", "info");
+      await deleteAccountClientSide();
+      hideDeleteAccountModal();
+      showMessage("Account deleted permanently.", "success");
+    } catch (clientDeleteError) {
+      const clientDeleteCode = String(clientDeleteError?.code || "").toLowerCase();
+      if (clientDeleteCode.includes("requires-recent-login")) {
+        showMessage("Please sign in again, then retry account deletion.", "error");
+        return;
+      }
+      if (isPermissionDeniedError(clientDeleteError)) {
+        showMessage("Account deletion blocked by Firestore rules. Deploy updated rules and retry.", "error");
+        return;
+      }
+      showMessage(`Account deletion failed: ${clientDeleteError.message}`, "error");
     }
   }
 }
@@ -1954,20 +2191,28 @@ function renderAdminPanel() {
 
   elements.adminRows.innerHTML = "";
 
-  const sourceBookings = state.selectedAdminTab === "all"
-    ? state.adminAllBookings
-    : state.adminPendingBookings;
+  const sourceBookings = state.selectedAdminTab === "pending"
+    ? state.adminPendingBookings
+    : state.adminAllBookings;
 
-  const bookings = sourceBookings.slice().sort((a, b) => {
+  const filteredBookings = state.selectedAdminTab === "approved"
+    ? sourceBookings.filter((booking) => getEffectiveBookingStatus(booking) === BOOKING_STATUS_APPROVED)
+    : sourceBookings;
+
+  const bookings = filteredBookings.slice().sort((a, b) => {
     const aCreated = a.createdAtMs || 0;
     const bCreated = b.createdAtMs || 0;
     return bCreated - aCreated;
   });
 
   if (bookings.length === 0) {
-    elements.adminEmpty.textContent = state.selectedAdminTab === "all"
-      ? "No bookings yet."
-      : "No pending or reviewing bookings right now.";
+    if (state.selectedAdminTab === "pending") {
+      elements.adminEmpty.textContent = "No pending or reviewing bookings right now.";
+    } else if (state.selectedAdminTab === "approved") {
+      elements.adminEmpty.textContent = "No approved bookings yet.";
+    } else {
+      elements.adminEmpty.textContent = "No bookings yet.";
+    }
     elements.adminEmpty.classList.remove("hidden");
     renderWorkspaceNavigation();
     return;
@@ -2026,7 +2271,10 @@ function renderAdminPanel() {
 
       actionsCell.appendChild(approveBtn);
       actionsCell.appendChild(rejectBtn);
-    } else if (state.selectedAdminTab === "all" && effectiveStatus === BOOKING_STATUS_APPROVED) {
+    } else if (
+      (state.selectedAdminTab === "all" || state.selectedAdminTab === "approved") &&
+      effectiveStatus === BOOKING_STATUS_APPROVED
+    ) {
       const cancelBtn = document.createElement("button");
       cancelBtn.type = "button";
       cancelBtn.className = "admin-action-btn cancel";
@@ -2088,18 +2336,33 @@ function updateProfileUI() {
   elements.profileName.textContent = state.profile.name || "-";
   elements.profileEmail.textContent = state.profile.email || "-";
   elements.profilePhoneNumber.textContent = state.profile.phoneNumber || "-";
-  elements.profileWhatsapp.textContent = state.profile.whatsappNumber || "-";
+  elements.profileWhatsapp.textContent = state.profile.whatsappNumber || state.profile.phoneNumber || state.profile.phone || "-";
   if (elements.profileReferralCode) {
-    const referralSeed = normalizeString(
-      state.profile.referralCode || state.profile.referral || state.user.uid || ""
-    ).replace(/[^a-z0-9]/gi, "").toUpperCase();
-    elements.profileReferralCode.textContent = referralSeed ? referralSeed.slice(0, 6).padEnd(6, "X") : "------";
+    const referralCode = normalizeReferralCode(
+      state.profile.referralCode || state.profile.referral || buildReferralCodeFromUid(state.user.uid)
+    );
+    elements.profileReferralCode.textContent = referralCode || "------";
   }
+  const affiliateStats = state.affiliateStats || {};
+  const inviteCount = Number(
+    affiliateStats.totalInvites ??
+      affiliateStats.invites ??
+      state.profile.totalInvites ??
+      state.profile.invites ??
+      state.profile.inviteCount ??
+      0
+  );
+  const conversionCount = Number(
+    affiliateStats.conversions ??
+      state.profile.conversions ??
+      state.profile.conversionCount ??
+      0
+  );
   if (elements.profileInviteCount) {
-    elements.profileInviteCount.textContent = String(Math.max(0, Number(state.profile.invites || state.profile.inviteCount || 0)));
+    elements.profileInviteCount.textContent = String(Math.max(0, Number.isFinite(inviteCount) ? Math.floor(inviteCount) : 0));
   }
   if (elements.profileConversionCount) {
-    elements.profileConversionCount.textContent = String(Math.max(0, Number(state.profile.conversions || state.profile.conversionCount || 0)));
+    elements.profileConversionCount.textContent = String(Math.max(0, Number.isFinite(conversionCount) ? Math.floor(conversionCount) : 0));
   }
 
   if (elements.adminChip) {
@@ -2175,6 +2438,10 @@ async function handleLogin() {
     return;
   }
 
+  const capturedReferralCode = normalizeReferralCode(elements.referralCodeInput?.value || state.pendingReferralCode);
+  state.pendingReferralCode = capturedReferralCode;
+  state.referralApplyAttempted = false;
+
   const canPopupLogin = Boolean(signInWithPopupFn);
   const canRedirectLogin = Boolean(signInWithRedirectFn);
 
@@ -2246,15 +2513,19 @@ async function saveUserProfile(whatsappNumber) {
     throw new Error("Firestore is not initialized.");
   }
 
-  const phoneNumber = whatsappNumber;
+  const normalizedContact = whatsappNumber.replace(/[\s\-()]/g, "");
+  const phoneNumber = normalizedContact;
+  const referralCode = normalizeReferralCode(state.profile?.referralCode) || buildReferralCodeFromUid(state.user.uid);
 
   const userRef = docFn(db, "users", state.user.uid);
   const payload = {
     name: state.user.displayName || "Unknown User",
     email: state.user.email || "",
-    phone: whatsappNumber,
+    phone: normalizedContact,
     phoneNumber,
-    whatsappNumber,
+    whatsapp: normalizedContact,
+    whatsappNumber: normalizedContact,
+    referralCode,
     updatedAt: serverTimestampFn()
   };
 
@@ -2272,13 +2543,103 @@ async function saveUserProfile(whatsappNumber) {
     ...state.profile,
     name: state.user.displayName || "Unknown User",
     email: state.user.email || "",
-    phone: whatsappNumber,
+    phone: normalizedContact,
     phoneNumber,
-    whatsappNumber
+    whatsappNumber: normalizedContact,
+    referralCode
   };
   updateProfileUI();
   renderPhases();
   renderLearningPanel();
+}
+
+async function maybeApplyPendingReferralCode() {
+  if (!state.user || state.referralApplyInFlight) {
+    return;
+  }
+
+  const referralCode = normalizeReferralCode(
+    state.pendingReferralCode || elements.referralCodeInput?.value || ""
+  );
+  if (!referralCode) {
+    return;
+  }
+
+  const ownReferralCode = normalizeReferralCode(
+    state.profile?.referralCode || buildReferralCodeFromUid(state.user.uid)
+  );
+  if (referralCode === ownReferralCode) {
+    state.pendingReferralCode = "";
+    state.referralApplyAttempted = true;
+    if (elements.referralCodeInput) {
+      elements.referralCodeInput.value = "";
+    }
+    showMessage("You cannot use your own referral code.", "info");
+    return;
+  }
+
+  if (normalizeString(state.profile?.referredBy)) {
+    state.pendingReferralCode = "";
+    state.referralApplyAttempted = true;
+    if (elements.referralCodeInput) {
+      elements.referralCodeInput.value = "";
+    }
+    return;
+  }
+
+  if (state.referralApplyAttempted) {
+    return;
+  }
+
+  state.referralApplyAttempted = true;
+  state.referralApplyInFlight = true;
+  try {
+    const response = await callBackendFunction("applyReferralCode", { referralCode });
+    state.pendingReferralCode = "";
+    if (elements.referralCodeInput) {
+      elements.referralCodeInput.value = "";
+    }
+
+    if (response?.referredBy) {
+      state.profile = {
+        ...(state.profile || {}),
+        referredBy: response.referredBy,
+        referralCode: normalizeReferralCode(response.referralCode || state.profile?.referralCode)
+      };
+      updateProfileUI();
+    }
+    showMessage("Referral code applied successfully.", "success");
+  } catch (error) {
+    if (error?.code === "functions-unavailable") {
+      showMessage("Referral service is not available. Deploy Cloud Functions first.", "info");
+    } else if (String(error?.code || "").includes("not-found")) {
+      showMessage("Referral code not found.", "info");
+    } else if (String(error?.code || "").includes("failed-precondition")) {
+      showMessage(error.message || "Referral code cannot be applied.", "info");
+    } else {
+      showMessage(`Failed to apply referral code: ${error.message}`, "error");
+    }
+  } finally {
+    state.referralApplyInFlight = false;
+  }
+}
+
+async function maybeMarkReferralConversion() {
+  if (!state.user || !normalizeString(state.profile?.referredBy)) {
+    return;
+  }
+
+  try {
+    await callBackendFunction("markReferralConversion", { phaseId: "phase1" });
+  } catch (error) {
+    if (error?.code === "functions-unavailable") {
+      return;
+    }
+    if (String(error?.code || "").includes("failed-precondition")) {
+      return;
+    }
+    showMessage(`Failed to update referral conversion: ${error.message}`, "error");
+  }
 }
 
 function buildBookingPayload(bookingId, userId, canonicalPhaseId, whatsappNumber) {
@@ -2352,10 +2713,6 @@ async function requestBookingForPhase(phaseId, whatsappNumber) {
   }
 
   const canonicalPhaseId = canonicalizePhaseId(phaseId);
-  if (canonicalPhaseId === "phase1") {
-    selectLearningPhase("phase1", true);
-    return true;
-  }
 
   const selectedPhase = getPhaseById(canonicalPhaseId);
   if (!selectedPhase) {
@@ -2391,11 +2748,20 @@ async function requestBookingForPhase(phaseId, whatsappNumber) {
       const normalizedMessage = String(error?.message || "").toLowerCase();
       if (normalizedCode.includes("failed-precondition") || normalizedMessage.includes("already")) {
         showMessage(error.message || "Booking cannot be created due to progression/lifecycle preconditions.", "info");
+        return false;
       } else if (normalizedCode.includes("resource-exhausted")) {
         showMessage("No seats available for this phase.", "error");
+        return false;
       } else if (normalizedCode.includes("permission-denied")) {
         showMessage("Booking blocked by backend authorization.", "error");
-      } else if (normalizedCode.includes("unavailable")) {
+        return false;
+      } else if (
+        normalizedCode.includes("unavailable") ||
+        normalizedCode.includes("internal") ||
+        normalizedCode.includes("unknown") ||
+        normalizedCode.includes("deadline-exceeded") ||
+        normalizedCode.includes("not-found")
+      ) {
         showMessage("Booking service unavailable. Retrying with legacy client transaction.", "info");
       } else {
         showMessage(`Booking failed: ${error.message}`, "error");
@@ -2510,13 +2876,28 @@ async function rejectBookingByAdmin(booking) {
 
   try {
     if (state.callablesReady) {
-      const handledByCallable = await performAdminBookingCallableAction(
-        "rejectBooking",
-        booking,
-        `Booking ${booking.bookingId} rejected.`
-      );
-      if (handledByCallable) {
-        return;
+      try {
+        const handledByCallable = await performAdminBookingCallableAction(
+          "rejectBooking",
+          booking,
+          `Booking ${booking.bookingId} rejected.`
+        );
+        if (handledByCallable) {
+          return;
+        }
+      } catch (callableError) {
+        const callableCode = String(callableError?.code || "").toLowerCase();
+        const fallbackSafe =
+          callableCode.includes("internal") ||
+          callableCode.includes("unavailable") ||
+          callableCode.includes("deadline-exceeded") ||
+          callableCode.includes("unknown");
+
+        if (!fallbackSafe) {
+          throw callableError;
+        }
+
+        showMessage("Reject service returned an internal error. Retrying with direct transaction...", "info");
       }
     }
 
@@ -2767,7 +3148,12 @@ function maybePromptForContactDetails() {
     return;
   }
 
-  const needsContact = !state.profile.whatsappNumber;
+  const hasAnyContact = Boolean(
+    normalizeString(state.profile.whatsappNumber) ||
+    normalizeString(state.profile.phoneNumber) ||
+    normalizeString(state.profile.phone)
+  );
+  const needsContact = !hasAnyContact;
   if (!needsContact) {
     state.hasPromptedForContact = false;
     return;
@@ -2937,12 +3323,44 @@ function subscribeToUserProfile(user) {
       renderPhases();
       renderLearningPanel();
       maybePromptForContactDetails();
+      if (state.pendingReferralCode && !normalizeString(state.profile?.referredBy)) {
+        void maybeApplyPendingReferralCode();
+      }
     },
     (error) => {
       if (isPermissionDeniedError(error)) {
         showMessage("Profile read blocked by Firestore rules. Allow users/{uid} read for that uid.", "error");
       } else {
         showMessage(`Failed to load profile: ${error.message}`, "error");
+      }
+    }
+  );
+}
+
+function subscribeToAffiliateStats(userId) {
+  if (!state.firebaseReady || !db || !docFn || !onSnapshotFn) {
+    return;
+  }
+
+  if (state.affiliateStatsUnsubscribe) {
+    state.affiliateStatsUnsubscribe();
+    state.affiliateStatsUnsubscribe = null;
+  }
+
+  const statsRef = docFn(db, "affiliateStats", userId);
+  state.affiliateStatsUnsubscribe = onSnapshotFn(
+    statsRef,
+    (snapshot) => {
+      state.affiliateStats = snapshot.exists()
+        ? normalizeAffiliateStats(snapshot.data())
+        : normalizeAffiliateStats({});
+      updateProfileUI();
+    },
+    (error) => {
+      if (isPermissionDeniedError(error)) {
+        showMessage("Affiliate stats read blocked by Firestore rules.", "error");
+      } else {
+        showMessage(`Failed to load affiliate stats: ${error.message}`, "error");
       }
     }
   );
@@ -3023,6 +3441,11 @@ function clearUserScopedListeners() {
     state.learningProgressUnsubscribe();
     state.learningProgressUnsubscribe = null;
   }
+
+  if (state.affiliateStatsUnsubscribe) {
+    state.affiliateStatsUnsubscribe();
+    state.affiliateStatsUnsubscribe = null;
+  }
 }
 
 function clearAdminListener() {
@@ -3038,19 +3461,22 @@ async function onAuthStateChangedHandler(user) {
 
   state.user = user;
   state.isAdmin = isAdminEmail(user?.email);
+  state.selectedAdminTab = state.isAdmin ? "approved" : "pending";
   state.pendingPhaseId = null;
   state.userBookingsByPhaseId = new Map();
   state.learningProgressByPhaseId = new Map();
+  state.affiliateStats = null;
   state.userDocExists = false;
   state.hasPromptedForContact = false;
   state.selectedLessonId = "";
+  state.referralApplyAttempted = false;
+  state.referralApplyInFlight = false;
 
   setSoundEngineAdminMode(state.isAdmin);
   if (!state.isAdmin) {
     state.adminPendingBookings = [];
     state.adminAllBookings = [];
     state.hasLoadedAdminBookings = false;
-    state.selectedAdminTab = "pending";
     state.hasShownSoundUnlockHint = false;
     clearSoundAnnouncementHistory();
   }
@@ -3062,6 +3488,10 @@ async function onAuthStateChangedHandler(user) {
   if (!user) {
     state.selectedNavSection = "home";
     state.profile = null;
+    state.pendingReferralCode = "";
+    if (elements.referralCodeInput) {
+      elements.referralCodeInput.value = "";
+    }
     updateProfileUI();
     renderPhases();
     renderLearningPanel();
@@ -3072,9 +3502,14 @@ async function onAuthStateChangedHandler(user) {
     return;
   }
 
+  state.pendingReferralCode = normalizeReferralCode(
+    state.pendingReferralCode || elements.referralCodeInput?.value || ""
+  );
+
   subscribeToUserProfile(user);
   subscribeToUserBookings(user.uid);
   subscribeToLearningProgress(user.uid);
+  subscribeToAffiliateStats(user.uid);
 
   if (state.isAdmin) {
     showMessage(`Admin access enabled for ${normalizeEmail(user.email)}.`, "success");
@@ -3098,16 +3533,6 @@ async function handlePhaseClick(phaseId) {
   }
 
   const canonicalPhaseId = canonicalizePhaseId(phaseId);
-  if (canonicalPhaseId === "phase1") {
-    if (!state.user) {
-      showMessage("Please log in first.", "error");
-      openLoginFlow();
-      return;
-    }
-    selectLearningPhase("phase1", true);
-    return;
-  }
-
   const phase = getPhaseById(canonicalPhaseId);
   if (!phase) {
     showMessage("Phase not found.", "error");
@@ -3188,6 +3613,12 @@ async function handlePhoneSubmit(event) {
 }
 
 function bindEvents() {
+  if (elements.referralCodeInput) {
+    elements.referralCodeInput.addEventListener("input", () => {
+      state.pendingReferralCode = normalizeReferralCode(elements.referralCodeInput.value);
+      state.referralApplyAttempted = false;
+    });
+  }
   elements.loginBtn.addEventListener("click", () => {
     registerSoundEngineUserInteraction();
     void handleLogin();
@@ -3259,6 +3690,25 @@ function bindEvents() {
     elements.profileInviteBtn.addEventListener("click", () => {
       registerSoundEngineUserInteraction();
       const code = elements.profileReferralCode?.textContent || "------";
+      const inviteText = `Join Shapla Chottor Lab with my referral code: ${code}`;
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        navigator.clipboard.writeText(inviteText)
+          .then(() => {
+            showMessage("Referral invite copied to clipboard.", "success");
+          })
+          .catch(() => {
+            if (fallbackCopyText(inviteText)) {
+              showMessage("Referral invite copied to clipboard.", "success");
+              return;
+            }
+            showMessage(`Referral code ready: ${code}`, "info");
+          });
+        return;
+      }
+      if (fallbackCopyText(inviteText)) {
+        showMessage("Referral invite copied to clipboard.", "success");
+        return;
+      }
       showMessage(`Referral code ready: ${code}`, "info");
     });
   }
@@ -3382,14 +3832,17 @@ async function setupFirebase() {
     signInWithRedirectFn = authSdk.signInWithRedirect;
     getRedirectResultFn = authSdk.getRedirectResult;
     signOutFn = authSdk.signOut;
+    deleteAuthUserFn = authSdk.deleteUser;
 
     collectionFn = firestoreSdk.collection;
     queryFn = firestoreSdk.query;
     whereFn = firestoreSdk.where;
     onSnapshotFn = firestoreSdk.onSnapshot;
+    getDocsFn = firestoreSdk.getDocs;
     runTransactionFn = firestoreSdk.runTransaction;
     docFn = firestoreSdk.doc;
     setDocFn = firestoreSdk.setDoc;
+    deleteDocFn = firestoreSdk.deleteDoc;
     serverTimestampFn = firestoreSdk.serverTimestamp;
     arrayUnionFn = firestoreSdk.arrayUnion;
     arrayRemoveFn = firestoreSdk.arrayRemove;
@@ -3439,11 +3892,8 @@ async function initializeApp() {
     if (!state.user) {
       return;
     }
-    renderPhases();
-    if (state.isAdmin && state.selectedNavSection === "admin") {
-      renderAdminPanel();
-    }
-  }, 30000);
+    refreshPendingBookingCountdowns();
+  }, 1000);
   showMessage("Loading phases from Firestore...", "info");
   applyBrowserEnvironmentGuard();
   updateAuthButtons();
