@@ -21,15 +21,61 @@ service cloud.firestore {
 
     function isBookingOwnerData(data) {
       return isSignedIn() && (
-        data.userId == request.auth.uid ||
-        data.uid == request.auth.uid
+        (("userId" in data) && data.userId == request.auth.uid) ||
+        (("uid" in data) && data.uid == request.auth.uid)
       );
     }
 
-    function isPendingBookingData(data) {
-      return data.status == "pending" &&
-        data.requestStatus == "pending" &&
-        data.bookingStatus == "pending";
+    function hasPendingBookingStatus(data) {
+      return (
+        (("status" in data) && data.status == "pending") ||
+        (("requestStatus" in data) && data.requestStatus == "pending") ||
+        (("bookingStatus" in data) && data.bookingStatus == "pending")
+      );
+    }
+
+    function hasReviewableBookingStatus(data) {
+      return (
+        (("status" in data) && (data.status == "pending" || data.status == "reviewing")) ||
+        (("requestStatus" in data) && (data.requestStatus == "pending" || data.requestStatus == "reviewing")) ||
+        (("bookingStatus" in data) && (data.bookingStatus == "pending" || data.bookingStatus == "reviewing"))
+      );
+    }
+
+    function hasTerminalBookingStatus(data) {
+      return (
+        (("status" in data) && (
+          data.status == "rejected" ||
+          data.status == "cancelled" ||
+          data.status == "expired"
+        )) ||
+        (("requestStatus" in data) && (
+          data.requestStatus == "rejected" ||
+          data.requestStatus == "cancelled" ||
+          data.requestStatus == "expired"
+        )) ||
+        (("bookingStatus" in data) && (
+          data.bookingStatus == "rejected" ||
+          data.bookingStatus == "cancelled" ||
+          data.bookingStatus == "expired"
+        ))
+      );
+    }
+
+    function hasConsistentPendingStatusAliases(data) {
+      return (
+        (!("status" in data) || data.status == "pending") &&
+        (!("requestStatus" in data) || data.requestStatus == "pending") &&
+        (!("bookingStatus" in data) || data.bookingStatus == "pending") &&
+        hasPendingBookingStatus(data)
+      );
+    }
+
+    function hasMatchingBookingDocumentIds(data, bookingId) {
+      return (
+        (!("bookingId" in data) || data.bookingId == bookingId) &&
+        (!("id" in data) || data.id == bookingId)
+      );
     }
 
     match /phases/{phaseId} {
@@ -40,28 +86,22 @@ service cloud.firestore {
     match /bookings/{bookingId} {
       allow read: if isSignedIn() && (
         resource == null ||
-        resource.data.userId == request.auth.uid ||
-        resource.data.uid == request.auth.uid ||
+        isBookingOwnerData(resource.data) ||
         isAdmin()
       );
       allow create: if isAdmin() || (
         isBookingOwnerData(request.resource.data) &&
-        isPendingBookingData(request.resource.data) &&
-        request.resource.data.bookingId == bookingId &&
-        request.resource.data.id == bookingId
+        hasConsistentPendingStatusAliases(request.resource.data) &&
+        hasMatchingBookingDocumentIds(request.resource.data, bookingId)
       );
       allow update: if isAdmin() || (
         isBookingOwnerData(resource.data) &&
         isBookingOwnerData(request.resource.data) &&
-        isPendingBookingData(request.resource.data) &&
-        request.resource.data.bookingId == bookingId &&
-        request.resource.data.id == bookingId
+        (hasReviewableBookingStatus(resource.data) || hasTerminalBookingStatus(resource.data)) &&
+        hasConsistentPendingStatusAliases(request.resource.data) &&
+        hasMatchingBookingDocumentIds(request.resource.data, bookingId)
       );
-      allow delete: if isSignedIn() && (
-        resource.data.userId == request.auth.uid ||
-        resource.data.uid == request.auth.uid ||
-        isAdmin()
-      );
+      allow delete: if isAdmin() || isBookingOwnerData(resource.data);
     }
 
     match /users/{userId} {
