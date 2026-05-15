@@ -19,25 +19,101 @@ service cloud.firestore {
       );
     }
 
+    function isBookingOwnerData(data) {
+      return isSignedIn() && (
+        (("userId" in data) && data.userId == request.auth.uid) ||
+        (("uid" in data) && data.uid == request.auth.uid)
+      );
+    }
+
+    function hasPendingBookingStatus(data) {
+      return (
+        (("status" in data) && data.status == "pending") ||
+        (("requestStatus" in data) && data.requestStatus == "pending") ||
+        (("bookingStatus" in data) && data.bookingStatus == "pending")
+      );
+    }
+
+    function hasReviewableBookingStatus(data) {
+      return (
+        (("status" in data) && (data.status == "pending" || data.status == "reviewing")) ||
+        (("requestStatus" in data) && (data.requestStatus == "pending" || data.requestStatus == "reviewing")) ||
+        (("bookingStatus" in data) && (data.bookingStatus == "pending" || data.bookingStatus == "reviewing"))
+      );
+    }
+
+    function hasTerminalBookingStatus(data) {
+      return (
+        (("status" in data) && (
+          data.status == "rejected" ||
+          data.status == "cancelled" ||
+          data.status == "expired"
+        )) ||
+        (("requestStatus" in data) && (
+          data.requestStatus == "rejected" ||
+          data.requestStatus == "cancelled" ||
+          data.requestStatus == "expired"
+        )) ||
+        (("bookingStatus" in data) && (
+          data.bookingStatus == "rejected" ||
+          data.bookingStatus == "cancelled" ||
+          data.bookingStatus == "expired"
+        ))
+      );
+    }
+
+    function hasConsistentPendingStatusAliases(data) {
+      return (
+        (!("status" in data) || data.status == "pending") &&
+        (!("requestStatus" in data) || data.requestStatus == "pending") &&
+        (!("bookingStatus" in data) || data.bookingStatus == "pending") &&
+        hasPendingBookingStatus(data)
+      );
+    }
+
+    function hasMatchingBookingDocumentIds(data, bookingId) {
+      return (
+        (!("bookingId" in data) || data.bookingId == bookingId) &&
+        (!("id" in data) || data.id == bookingId)
+      );
+    }
+
     match /phases/{phaseId} {
       allow read: if true;
-      allow write: if false;
+      allow write: if isAdmin();
     }
 
     match /bookings/{bookingId} {
       allow read: if isSignedIn() && (
-        resource.data.userId == request.auth.uid ||
+        resource == null ||
+        isBookingOwnerData(resource.data) ||
         isAdmin()
       );
-      allow write: if false;
+      allow create: if isAdmin() || (
+        isBookingOwnerData(request.resource.data) &&
+        hasConsistentPendingStatusAliases(request.resource.data) &&
+        hasMatchingBookingDocumentIds(request.resource.data, bookingId)
+      );
+      allow update: if isAdmin() || (
+        isBookingOwnerData(resource.data) &&
+        isBookingOwnerData(request.resource.data) &&
+        (hasReviewableBookingStatus(resource.data) || hasTerminalBookingStatus(resource.data)) &&
+        hasConsistentPendingStatusAliases(request.resource.data) &&
+        hasMatchingBookingDocumentIds(request.resource.data, bookingId)
+      );
+      allow delete: if isAdmin() || isBookingOwnerData(resource.data);
     }
 
     match /users/{userId} {
       allow read: if isOwner(userId) || isAdmin();
-      allow create, update: if isOwner(userId);
-      allow delete: if false;
+      allow create, update: if isOwner(userId) || isAdmin();
+      allow delete: if isOwner(userId) || isAdmin();
 
       match /progress/{phaseId} {
+        allow read, write: if isOwner(userId) || isAdmin();
+      }
+
+      match /progress/{phaseId}/{document=**} {
         allow read, write: if isOwner(userId) || isAdmin();
       }
     }
@@ -45,13 +121,18 @@ service cloud.firestore {
     match /referralEvents/{eventId} {
       allow read: if isAdmin() || (isSignedIn() && (
         resource.data.userId == request.auth.uid ||
+        resource.data.referredUserId == request.auth.uid ||
         resource.data.referrerId == request.auth.uid
       ));
       allow create, update: if isAdmin() || (isSignedIn() && (
         request.resource.data.userId == request.auth.uid ||
         request.resource.data.referrerId == request.auth.uid
       ));
-      allow delete: if false;
+      allow delete: if isAdmin() || (isSignedIn() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.referredUserId == request.auth.uid ||
+        resource.data.referrerId == request.auth.uid
+      ));
     }
 
     match /affiliateStats/{affiliateId} {
@@ -63,7 +144,10 @@ service cloud.firestore {
         affiliateId == request.auth.uid ||
         request.resource.data.userId == request.auth.uid
       ));
-      allow delete: if false;
+      allow delete: if isAdmin() || (isSignedIn() && (
+        affiliateId == request.auth.uid ||
+        resource.data.userId == request.auth.uid
+      ));
     }
 
     match /{document=**} {
