@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Operations Center</title>
+  <link rel="icon" type="image/svg+xml" href="../lotus_logo.svg" />
+  <link rel="shortcut icon" href="../lotus_logo.svg" />
+  <link rel="stylesheet" href="./admin.css" />
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-funnel@4.2.5/build/index.umd.min.js"></script>
+</head>
+<body>
+  <div class="ops-shell">
+    <aside class="ops-sidebar">
+      <div class="brand-block">
+        <img src="../Image/ShaplaChottor.png" alt="Shapla Chottor Lab" class="brand-logo" />
+        <div>
+          <p class="brand-kicker">Internal Tool</p>
+          <h1>Admin Operations Center</h1>
+        </div>
+      </div>
+
+      <p id="adminIdentityText" class="identity-text">Not signed in</p>
+      <p id="authStateText" class="auth-state">Sign in with your admin account</p>
+
+      <div class="auth-actions">
+        <button id="adminLoginBtn" type="button" class="primary-btn">
+          <i data-lucide="log-in"></i>
+          <span>Sign In</span>
+        </button>
+        <button id="adminLogoutBtn" type="button" class="secondary-btn hidden">
+          <i data-lucide="log-out"></i>
+          <span>Sign Out</span>
+        </button>
+      </div>
+
+      <div class="status-box">
+        <span id="opsStatusDot" class="status-dot warn"></span>
+        <p id="opsStatusText">Initializing...</p>
+      </div>
+
+      <nav class="ops-nav" aria-label="Dashboard Sections">
+        <a href="#kpiSection">KPI</a>
+        <a href="#learningSection">Learning</a>
+        <a href="#studentSection">Students</a>
+        <a href="#bookingSection">Bookings</a>
+        <a href="#phaseSection">Phases</a>
+        <a href="#referralSection">Referrals</a>
+        <a href="#alertsSection">Alerts</a>
+      </nav>
+    </aside>
+
+    <main class="ops-main">
+      <section id="authGate" class="gate-card">
+        <h2>Admin Login Required</h2>
+        <p>Sign in with the authorized admin account to load real-time operational intelligence.</p>
+      </section>
+
+      <section id="accessDenied" class="gate-card hidden">
+        <h2>Access Denied</h2>
+        <p>This account is authenticated but does not have admin privileges in Firestore rules.</p>
+      </section>
+
+      <div id="adminWorkspace" class="ops-workspace hidden">
+        <section id="kpiSection" class="panel">
+          <header class="panel-header">
+            <h2>Executive KPI Overview</h2>
+          </header>
+          <div id="kpiGrid" class="kpi-grid"></div>
+        </section>
+
+        <section id="learningSection" class="panel">
+          <header class="panel-header">
+            <h2>Learning Activity Intelligence</h2>
+            <div class="learning-metrics-inline">
+              <span>Active Today: <strong id="metricActiveToday">0</strong></span>
+              <span>Inactive 7+ Days: <strong id="metricInactive">0</strong></span>
+              <span>Average Completion: <strong id="metricAvgCompletion">0%</strong></span>
+              <span>Learning Velocity: <strong id="metricVelocity">0%/day</strong></span>
+              <span>Most Completed: <strong id="metricMostCompleted">-</strong></span>
+              <span>Least Active: <strong id="metricLeastActive">-</strong></span>
+            </div>
+          </header>
+          <div class="chart-grid learning-grid">
+            <article class="chart-panel">
+              <h3>Lesson Completion Trend</h3>
+              <div class="chart-wrap"><canvas id="learningTrendChart"></canvas></div>
+            </article>
+            <article class="chart-panel">
+              <h3>Active Learners By Phase</h3>
+              <div class="chart-wrap"><canvas id="activeByPhaseChart"></canvas></div>
+            </article>
+            <article class="chart-panel">
+              <h3>Learner Health Distribution</h3>
+              <div class="chart-wrap"><canvas id="learningDistributionChart"></canvas></div>
+            </article>
+          </div>
+        </section>
+
+        <section id="studentSection" class="panel">
+          <header class="panel-header">
+            <h2>Student Progress Monitoring</h2>
+            <span id="studentCountLabel" class="meta-text">0 students</span>
+          </header>
+          <div class="toolbar-row">
+            <input id="studentSearchInput" type="search" placeholder="Search name, email, user ID" />
+            <select id="studentRiskFilter">
+              <option value="all">All Risk Levels</option>
+              <option value="high">High Risk</option>
+              <option value="medium">Medium Risk</option>
+              <option value="low">Low Risk</option>
+            </select>
+            <select id="studentPhaseFilter">
+              <option value="all">All Phases</option>
+            </select>
+            <select id="studentBookingFilter">
+              <option value="all">All Booking Statuses</option>
+              <option value="pending">Pending</option>
+              <option value="reviewing">Reviewing</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+              <option value="cancelled">Cancelled</option>
+              <option value="expired">Expired</option>
+              <option value="none">No Booking</option>
+            </select>
+          </div>
+
+          <div class="table-wrap">
+            <table class="ops-table">
+              <thead>
+                <tr>
+                  <th><button type="button" data-student-sort="name">Name</button></th>
+                  <th><button type="button" data-student-sort="email">Email</button></th>
+                  <th><button type="button" data-student-sort="whatsappNumber">WhatsApp</button></th>
+                  <th><button type="button" data-student-sort="currentPhaseTitle">Current Phase</button></th>
+                  <th><button type="button" data-student-sort="overallProgressPercent">Progress %</button></th>
+                  <th><button type="button" data-student-sort="completedLessons">Completed Lessons</button></th>
+                  <th><button type="button" data-student-sort="lastLearningActivityMs">Last Activity</button></th>
+                  <th><button type="button" data-student-sort="latestBookingStatus">Booking Status</button></th>
+                  <th><button type="button" data-student-sort="referralSource">Referral Source</button></th>
+                  <th><button type="button" data-student-sort="riskScore" class="active">Risk Level</button></th>
+                </tr>
+              </thead>
+              <tbody id="studentTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="bookingSection" class="panel">
+          <header class="panel-header">
+            <h2>Booking Operations Pipeline</h2>
+            <div class="toolbar-row compact">
+              <select id="bookingPhaseFilter">
+                <option value="all">All Phases</option>
+              </select>
+              <select id="bookingWindowFilter">
+                <option value="0">All Time</option>
+                <option value="30">Last 30 Days</option>
+                <option value="7">Last 7 Days</option>
+              </select>
+            </div>
+          </header>
+          <div class="booking-grid">
+            <article class="chart-panel">
+              <h3>Funnel</h3>
+              <div class="chart-wrap"><canvas id="bookingFunnelChart"></canvas></div>
+            </article>
+            <aside id="bookingFunnelMeta" class="booking-meta"></aside>
+          </div>
+        </section>
+
+        <section id="phaseSection" class="panel">
+          <header class="panel-header">
+            <h2>Phase Analytics</h2>
+          </header>
+          <div id="phaseAnalyticsGrid" class="phase-grid"></div>
+        </section>
+
+        <section id="referralSection" class="panel">
+          <header class="panel-header">
+            <h2>Referral Analytics</h2>
+            <span id="referralSummaryText" class="meta-text">0 invites | 0 conversions | 0% conversion rate</span>
+          </header>
+          <div class="chart-grid referral-grid">
+            <article class="chart-panel">
+              <h3>Referral Growth</h3>
+              <div class="chart-wrap"><canvas id="referralGrowthChart"></canvas></div>
+            </article>
+            <article class="chart-panel">
+              <h3>Conversion Split</h3>
+              <div class="chart-wrap"><canvas id="referralConversionChart"></canvas></div>
+            </article>
+          </div>
+          <div class="table-wrap">
+            <table class="ops-table">
+              <thead>
+                <tr>
+                  <th>Rank</th>
+                  <th>Referrer</th>
+                  <th>Invites</th>
+                  <th>Conversions</th>
+                  <th>CVR</th>
+                </tr>
+              </thead>
+              <tbody id="referralLeaderboardBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="alertsSection" class="panel">
+          <header class="panel-header">
+            <h2>Real-Time Alerts</h2>
+          </header>
+          <ul id="alertsList" class="alerts-list"></ul>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div id="studentDrawerBackdrop" class="drawer-backdrop"></div>
+  <aside id="studentDrawer" class="student-drawer">
+    <header class="drawer-header">
+      <h2>Student Deep-Dive</h2>
+      <button id="drawerCloseBtn" type="button" class="icon-btn" aria-label="Close deep dive drawer">
+        <i data-lucide="x"></i>
+      </button>
+    </header>
+
+    <section id="drawerProfile" class="drawer-section"></section>
+
+    <section class="drawer-section">
+      <h3>Phase Progression</h3>
+      <ul id="drawerPhases" class="drawer-phase-list"></ul>
+    </section>
+
+    <section class="drawer-section">
+      <h3>Booking History</h3>
+      <div class="table-wrap compact">
+        <table class="ops-table compact">
+          <thead>
+            <tr>
+              <th>Phase</th>
+              <th>Status</th>
+              <th>Requested</th>
+              <th>Last Update</th>
+            </tr>
+          </thead>
+          <tbody id="drawerBookingsBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="drawer-section">
+      <h3>Activity Timeline</h3>
+      <ul id="drawerTimeline" class="timeline-list"></ul>
+    </section>
+
+    <section class="drawer-section">
+      <h3>Unlocked Features</h3>
+      <ul id="drawerFeatures" class="feature-list"></ul>
+    </section>
+  </aside>
+
+  <script type="module" src="./admin.js"></script>
+</body>
+</html>

@@ -170,6 +170,7 @@ const elements = {
   topbarSectionLabel: document.getElementById("topbarSectionLabel"),
   topbarProgressLabel: document.getElementById("topbarProgressLabel"),
   topbarBookingLabel: document.getElementById("topbarBookingLabel"),
+  topbarAdminOpsBtn: document.getElementById("topbarAdminOpsBtn"),
   homePanel: document.getElementById("homePanel"),
   homeWelcomeName: document.getElementById("homeWelcomeName"),
   homeUnlockedPhasesCount: document.getElementById("homeUnlockedPhasesCount"),
@@ -2143,6 +2144,9 @@ function renderWorkspaceNavigation() {
 
   renderSectionVisibility();
   updateTopbarContext();
+  if (elements.topbarAdminOpsBtn) {
+    elements.topbarAdminOpsBtn.classList.toggle("hidden", !(state.user && state.isAdmin));
+  }
   refreshLucideIcons();
 }
 
@@ -2310,6 +2314,9 @@ function updateAuthButtons() {
 
   elements.loginBtn.title = loginBlocked ? blockTitle : "";
   elements.loginModalBtn.title = loginBlocked ? blockTitle : "";
+  if (elements.topbarAdminOpsBtn) {
+    elements.topbarAdminOpsBtn.classList.toggle("hidden", !(state.user && state.isAdmin));
+  }
   renderSectionVisibility();
 }
 
@@ -3808,6 +3815,16 @@ function bindEvents() {
       }
       showMessage("Voice test triggered. You should hear: Test sound working.", "success");
     };
+  }
+  if (elements.topbarAdminOpsBtn) {
+    elements.topbarAdminOpsBtn.addEventListener("click", () => {
+      registerSoundEngineUserInteraction();
+      if (!state.user || !state.isAdmin) {
+        showMessage("Admin access required for operations center.", "error");
+        return;
+      }
+      window.location.href = "./admin/admin.html";
+    });
   }
 }
 
