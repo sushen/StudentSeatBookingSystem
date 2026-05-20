@@ -505,6 +505,29 @@ img {
   gap: 8px;
 }
 
+.topbar-admin-ops-btn {
+  margin-top: 10px;
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid #bfd3ea;
+  background: linear-gradient(160deg, #edf5ff 0%, #e7f1fd 100%);
+  color: #1f5d91;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.topbar-admin-ops-btn .nav-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  font-size: 0.78rem;
+  background: rgba(31, 93, 145, 0.12);
+  color: #1f5d91;
+}
+
 .topbar-chip {
   display: inline-flex;
   align-items: center;
