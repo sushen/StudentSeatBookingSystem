@@ -1,4 +1,4 @@
-import { formatInteger, formatPercent, formatRelativeDays } from "../utils/formatters.js";
+import { formatDate, formatInteger, formatPercent, formatRelativeDays } from "../utils/formatters.js";
 
 function buildRiskBadge(riskLevel) {
   const label = riskLevel === "high" ? "High" : riskLevel === "medium" ? "Medium" : "Low";
@@ -35,6 +35,7 @@ export function renderStudentTable({ tbody, rows, selectedStudentId, onRowClick,
       <td>${formatPercent(student.overallProgressPercent, 0)}</td>
       <td>${formatInteger(student.completedLessons)}</td>
       <td>${formatRelativeDays(student.lastLearningActivityMs, nowMs)}</td>
+      <td>${formatDate(student.tableDateMs)}</td>
       <td>${buildBookingBadge(student.latestBookingStatus)}</td>
       <td>${student.referralSource || "Direct"}</td>
       <td>${buildRiskBadge(student.riskLevel)}</td>
