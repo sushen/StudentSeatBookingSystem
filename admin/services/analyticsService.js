@@ -632,10 +632,23 @@ export function buildOperationalAnalytics(snapshot, options = {}) {
       ? (referrerProfile?.name || user.referredBy)
       : "Direct";
     const whatsappNumber = resolveBestWhatsapp(user, userBookings);
+    const dateAnchorRaw = latestBookingStatus === BOOKING_STATUS.expired
+      ? Number(latestBooking?.expiresAtMs || latestBooking?.updatedAtMs || latestBooking?.createdAtMs || 0)
+      : Number(
+        user.createdAtMs ||
+        user.updatedAtMs ||
+        latestBooking?.createdAtMs ||
+        latestBooking?.updatedAtMs ||
+        latestBooking?.expiresAtMs ||
+        lastLearningActivityMs ||
+        0
+      );
+    const tableDateMs = Number.isFinite(dateAnchorRaw) && dateAnchorRaw > 0 ? dateAnchorRaw : null;
 
     const studentBase = {
       ...user,
       whatsappNumber,
+      tableDateMs,
       overallProgressPercent,
       completedLessons,
       currentPhaseId,
