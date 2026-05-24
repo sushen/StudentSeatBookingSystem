@@ -1469,6 +1469,28 @@ img {
   margin: 0;
 }
 
+.profile-meta-referred-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.profile-meta-edit-btn.icon-btn {
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  border-radius: 8px;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.profile-meta-edit-btn i {
+  width: 14px;
+  height: 14px;
+}
+
 .profile-referral-wrap {
   margin-top: 14px;
   border-top: 1px solid #e1e8f1;
@@ -1527,6 +1549,75 @@ img {
   display: block;
   font-size: 0.79rem;
   color: #697a90;
+}
+
+.profile-referral-activity {
+  margin-top: 12px;
+  border: 1px solid #d8e2ed;
+  border-radius: var(--radius-sm);
+  background: #f7fafe;
+  padding: 10px;
+}
+
+.profile-referral-activity-title {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #4f6179;
+}
+
+.profile-referral-empty {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+  color: #6e7f95;
+}
+
+.profile-referral-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.profile-referral-item {
+  border: 1px solid #dbe6f2;
+  border-radius: 10px;
+  background: #ffffff;
+  padding: 8px;
+}
+
+.profile-referral-item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.profile-referral-item-name {
+  margin: 0;
+  font-size: 0.83rem;
+  font-weight: 700;
+  color: #2f4259;
+}
+
+.profile-referral-item-status {
+  margin: 0;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: #6d7c8f;
+}
+
+.profile-referral-item-status.converted {
+  color: #1f8f55;
+}
+
+.profile-referral-item-meta {
+  margin: 4px 0 0;
+  font-size: 0.74rem;
+  color: #6e7f95;
 }
 
 .profile-settings-wrap {
@@ -1604,6 +1695,28 @@ img {
 .admin-panel h2 {
   margin: 0 0 10px;
   font-size: 1.36rem;
+}
+
+.admin-heading-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.admin-heading-row h2 {
+  margin: 0;
+}
+
+.admin-queue-link-btn {
+  border: 1px solid #c8d8eb;
+  border-radius: 999px;
+  background: #edf4fd;
+  color: #27557c;
+  font-size: 0.76rem;
+  font-weight: 700;
+  padding: 7px 12px;
 }
 
 .admin-tabs {
@@ -1798,6 +1911,18 @@ img {
   margin: 8px 0 0;
   color: #4f6077;
   line-height: 1.45;
+}
+
+.referral-confirm-code {
+  margin-top: 10px;
+  border: 1px solid #d4e0ee;
+  border-radius: var(--radius-sm);
+  background: #f4f9ff;
+  color: #2c537e;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-align: center;
+  padding: 10px 12px;
 }
 
 .inapp-modal-card {

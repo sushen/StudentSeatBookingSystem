@@ -2,6 +2,7 @@ import { setGlobalOptions } from "firebase-functions/v2";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import admin from "firebase-admin";
+import { createHash, randomUUID } from "node:crypto";
 
 admin.initializeApp();
 
@@ -14,12 +15,25 @@ const db = admin.firestore();
 const auth = admin.auth();
 const { FieldValue } = admin.firestore;
 
-const ADMIN_EMAILS = new Set([
+const FALLBACK_SUPER_ADMIN_EMAILS = new Set([
   "sushen.biswas.aga@gmail.com",
   "sushen.biswas.aga@googlemail.com"
 ]);
+const SUPER_ADMIN_CONFIG_PATH = "appConfig/system";
+const ADMIN_REFERRAL_ALIAS = "ADMIN";
 
 const BOOKING_EXPIRY_MS = 15 * 60 * 1000;
+const AFFILIATE_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const COMMISSION_DEFAULT_AMOUNT_MICROS = 1000000;
+const COMMISSION_DEFAULT_CURRENCY = "USD";
+const COMMISSION_DEFAULT_RATE_BPS = 1000;
+const COMMISSION_STATUS_PENDING = "pending";
+const REFERRAL_EVENT_STATUS_JOINED = "joined";
+const REFERRAL_EVENT_STATUS_CONVERTED = "converted";
+const REFERRAL_APPROVAL_STATUS_PENDING = "pending";
+const REFERRAL_APPROVAL_STATUS_APPROVED = "approved";
+const REFERRAL_APPROVAL_STATUS_REJECTED = "rejected";
+const REFERRAL_APPROVAL_COLLECTION = "referralApprovals";
 
 const BOOKING_STATUS_PENDING = "pending";
 const BOOKING_STATUS_REVIEWING = "reviewing";
@@ -63,9 +77,35 @@ function normalizeEmail(value) {
   return normalizeString(value).toLowerCase();
 }
 
+function normalizeEmailList(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const uniqueEmails = new Set(
+    value
+      .map((entry) => normalizeEmail(entry))
+      .filter(Boolean)
+  );
+  return Array.from(uniqueEmails);
+}
+
 function normalizeReferralCode(value) {
   const normalized = normalizeString(value).replace(/[^a-z0-9]/gi, "").toUpperCase();
   return normalized.slice(0, 6);
+}
+
+function normalizeSessionId(value) {
+  const normalized = normalizeString(value).replace(/[^a-z0-9_-]/gi, "");
+  if (normalized.length < 8 || normalized.length > 128) {
+    return "";
+  }
+  return normalized;
+}
+
+function normalizeCampaignId(value) {
+  const normalized = normalizeString(value).replace(/[^a-z0-9_-]/gi, "").toLowerCase();
+  return normalized.slice(0, 64);
 }
 
 function buildReferralCodeFromUid(uid) {
@@ -74,6 +114,271 @@ function buildReferralCodeFromUid(uid) {
     return "";
   }
   return normalizedUid.slice(-6).padStart(6, "X");
+}
+
+function isAdminReferralAlias(referralCode) {
+  return normalizeReferralCode(referralCode) === normalizeReferralCode(ADMIN_REFERRAL_ALIAS);
+}
+
+function getFallbackSuperAdminEmails() {
+  return Array.from(FALLBACK_SUPER_ADMIN_EMAILS)
+    .map((email) => normalizeEmail(email))
+    .filter(Boolean);
+}
+
+async function loadConfiguredSuperAdminEmails() {
+  try {
+    const configSnapshot = await db.doc(SUPER_ADMIN_CONFIG_PATH).get();
+    if (!configSnapshot.exists) {
+      return [];
+    }
+
+    const configData = configSnapshot.data() || {};
+    const configuredEmails = new Set(normalizeEmailList(configData.superAdminEmails));
+    const primaryEmail = normalizeEmail(configData.superAdminEmail);
+    if (primaryEmail) {
+      configuredEmails.add(primaryEmail);
+    }
+    return Array.from(configuredEmails);
+  } catch (error) {
+    void error;
+    return [];
+  }
+}
+
+async function getActiveSuperAdminEmails() {
+  const configuredEmails = await loadConfiguredSuperAdminEmails();
+  if (configuredEmails.length) {
+    return configuredEmails;
+  }
+  return getFallbackSuperAdminEmails();
+}
+
+async function findSuperAdminReferrerDoc(superAdminEmails = null) {
+  const emails = Array.isArray(superAdminEmails) && superAdminEmails.length
+    ? normalizeEmailList(superAdminEmails)
+    : await getActiveSuperAdminEmails();
+
+  for (const adminEmail of emails) {
+    const normalizedAdminEmail = normalizeEmail(adminEmail);
+    if (!normalizedAdminEmail) {
+      continue;
+    }
+    const adminSnapshot = await db.collection("users")
+      .where("email", "==", normalizedAdminEmail)
+      .limit(1)
+      .get();
+    if (!adminSnapshot.empty) {
+      return adminSnapshot.docs[0];
+    }
+
+    try {
+      const adminAuthUser = await auth.getUserByEmail(normalizedAdminEmail);
+      const userDocSnapshot = await db.doc(`users/${adminAuthUser.uid}`).get();
+      if (userDocSnapshot.exists) {
+        return userDocSnapshot;
+      }
+    } catch (error) {
+      const code = normalizeString(error?.code);
+      if (code === "auth/user-not-found") {
+        continue;
+      }
+      throw error;
+    }
+  }
+  return null;
+}
+
+async function resolveAdminReferralCode() {
+  const activeSuperAdminEmails = await getActiveSuperAdminEmails();
+  const adminReferrerDoc = await findSuperAdminReferrerDoc(activeSuperAdminEmails);
+  if (adminReferrerDoc) {
+    const adminData = adminReferrerDoc.data() || {};
+    const referralCode =
+      normalizeReferralCode(adminData.referralCode) || buildReferralCodeFromUid(adminReferrerDoc.id);
+    if (referralCode) {
+      return {
+        referralCode,
+        adminEmail: normalizeEmail(adminData.email)
+      };
+    }
+  }
+
+  for (const adminEmail of activeSuperAdminEmails) {
+    const normalizedAdminEmail = normalizeEmail(adminEmail);
+    if (!normalizedAdminEmail) {
+      continue;
+    }
+    try {
+      const adminAuthUser = await auth.getUserByEmail(normalizedAdminEmail);
+      const fallbackCode = buildReferralCodeFromUid(adminAuthUser.uid);
+      if (fallbackCode) {
+        return {
+          referralCode: fallbackCode,
+          adminEmail: normalizedAdminEmail
+        };
+      }
+    } catch (error) {
+      const code = normalizeString(error?.code);
+      if (code === "auth/user-not-found") {
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  return null;
+}
+
+async function buildSuperAdminProfileResponse() {
+  const superAdminEmails = await getActiveSuperAdminEmails();
+  const resolvedReferral = await resolveAdminReferralCode();
+  const superAdminEmail = normalizeEmail(
+    resolvedReferral?.adminEmail ||
+    superAdminEmails[0] ||
+    ""
+  );
+
+  return {
+    superAdminEmail,
+    superAdminEmails,
+    referralCode: normalizeReferralCode(resolvedReferral?.referralCode),
+    adminEmail: superAdminEmail
+  };
+}
+
+async function resolveReferrerByReferralCode(referralCodeInput) {
+  const requestedReferralCode = normalizeReferralCode(referralCodeInput);
+  if (!requestedReferralCode) {
+    return null;
+  }
+
+  if (isAdminReferralAlias(requestedReferralCode)) {
+    const adminReferrerDoc = await findSuperAdminReferrerDoc();
+    if (!adminReferrerDoc) {
+      return null;
+    }
+    const adminData = adminReferrerDoc.data() || {};
+    const resolvedReferralCode =
+      normalizeReferralCode(adminData.referralCode) || buildReferralCodeFromUid(adminReferrerDoc.id);
+
+    return {
+      referrerDoc: adminReferrerDoc,
+      requestedReferralCode,
+      resolvedReferralCode
+    };
+  }
+
+  const referrerSnapshot = await db.collection("users")
+    .where("referralCode", "==", requestedReferralCode)
+    .limit(1)
+    .get();
+
+  if (referrerSnapshot.empty) {
+    return null;
+  }
+
+  return {
+    referrerDoc: referrerSnapshot.docs[0],
+    requestedReferralCode,
+    resolvedReferralCode: requestedReferralCode
+  };
+}
+
+function normalizeReferralApprovalStatus(value) {
+  const normalized = normalizeString(value).toLowerCase();
+  if (
+    normalized === REFERRAL_APPROVAL_STATUS_PENDING ||
+    normalized === REFERRAL_APPROVAL_STATUS_APPROVED ||
+    normalized === REFERRAL_APPROVAL_STATUS_REJECTED
+  ) {
+    return normalized;
+  }
+  return REFERRAL_APPROVAL_STATUS_PENDING;
+}
+
+function getReferralAssignmentFlagsForReferrer(referredUserData = {}, {
+  referrerId = "",
+  referralCode = ""
+} = {}) {
+  const normalizedReferrerId = normalizeString(referrerId);
+  const normalizedReferralCode = normalizeReferralCode(referralCode);
+  const referredByValue = normalizeString(referredUserData.referredBy);
+  const referredByCode = normalizeReferralCode(referredUserData.referredByCode);
+  const pendingReferralCode = normalizeReferralCode(
+    referredUserData.pendingReferralCode || referredUserData.pendingReferralLastCode
+  );
+  const pendingReferrerId = normalizeString(
+    referredUserData.pendingReferralReferrerId || referredUserData.pendingReferralLastReferrerId
+  );
+
+  const assignedById = Boolean(normalizedReferrerId) && referredByValue === normalizedReferrerId;
+  const assignedByCode = Boolean(normalizedReferralCode) && referredByCode === normalizedReferralCode;
+  const assignedByLegacyReferredByCode = (
+    Boolean(normalizedReferralCode) &&
+    normalizeReferralCode(referredByValue) === normalizedReferralCode
+  );
+  const pendingById = Boolean(normalizedReferrerId) && pendingReferrerId === normalizedReferrerId;
+  const pendingByCode = Boolean(normalizedReferralCode) && pendingReferralCode === normalizedReferralCode;
+
+  return {
+    assignedById,
+    assignedByCode,
+    assignedByLegacyReferredByCode,
+    pendingById,
+    pendingByCode
+  };
+}
+
+function isReferralAssignmentMatch(assignmentFlags = {}) {
+  return Boolean(
+    assignmentFlags.assignedById ||
+    assignmentFlags.assignedByCode ||
+    assignmentFlags.assignedByLegacyReferredByCode ||
+    assignmentFlags.pendingById ||
+    assignmentFlags.pendingByCode
+  );
+}
+
+function isReferralConvertedForSync(referredUserData = {}, assignmentFlags = {}) {
+  const referralStatus = normalizeReferralApprovalStatus(referredUserData.pendingReferralStatus);
+  if (
+    referralStatus === REFERRAL_APPROVAL_STATUS_APPROVED ||
+    referralStatus === REFERRAL_APPROVAL_STATUS_REJECTED
+  ) {
+    return true;
+  }
+  return Boolean(
+    assignmentFlags.assignedById ||
+    assignmentFlags.assignedByCode ||
+    assignmentFlags.assignedByLegacyReferredByCode
+  );
+}
+
+function normalizeReferralApprovalRequestDoc(docId, data = {}) {
+  const status = normalizeReferralApprovalStatus(data.status);
+  return {
+    requestId: normalizeString(data.requestId) || docId,
+    requesterId: normalizeString(data.requesterId),
+    requesterName: normalizeString(data.requesterName),
+    requesterEmail: normalizeEmail(data.requesterEmail),
+    requesterPhone: normalizeString(data.requesterPhone || data.phone || data.phoneNumber),
+    requesterWhatsApp: normalizeString(data.requesterWhatsApp || data.whatsapp || data.whatsappNumber),
+    referralCode: normalizeReferralCode(data.referralCode),
+    resolvedReferralCode: normalizeReferralCode(data.resolvedReferralCode),
+    referrerId: normalizeString(data.referrerId),
+    referrerName: normalizeString(data.referrerName),
+    referrerEmail: normalizeEmail(data.referrerEmail),
+    status,
+    source: normalizeString(data.source) || "web",
+    sessionId: normalizeSessionId(data.sessionId),
+    reviewedBy: normalizeString(data.reviewedBy),
+    reviewedByEmail: normalizeEmail(data.reviewedByEmail),
+    reviewReason: normalizeString(data.reviewReason),
+    createdAtMs: toMillis(data.createdAt) ?? normalizeNumber(data.createdAtMs) ?? null,
+    updatedAtMs: toMillis(data.updatedAt) ?? normalizeNumber(data.updatedAtMs) ?? null,
+    reviewedAtMs: toMillis(data.reviewedAt) ?? normalizeNumber(data.reviewedAtMs) ?? null
+  };
 }
 
 function canonicalizePhaseId(phaseId) {
@@ -153,6 +458,61 @@ function normalizeStringArray(value) {
   return Array.from(unique);
 }
 
+function hashValue(value) {
+  const normalized = normalizeString(value);
+  if (!normalized) {
+    return null;
+  }
+  return createHash("sha256").update(normalized).digest("hex");
+}
+
+function normalizeIpFromRequest(request) {
+  const rawForwarded = normalizeString(request?.rawRequest?.headers?.["x-forwarded-for"]);
+  if (rawForwarded) {
+    return normalizeString(rawForwarded.split(",")[0]);
+  }
+  return normalizeString(request?.rawRequest?.ip);
+}
+
+function getActorFromRequest(request, fallbackActorType = "system") {
+  const uid = normalizeString(request?.auth?.uid);
+  const email = normalizeEmail(request?.auth?.token?.email || "");
+  if (uid) {
+    const actorType = request?.auth?.token?.admin === true ? "admin" : fallbackActorType;
+    return { actorType, actorId: uid, actorEmail: email };
+  }
+  return { actorType: "anonymous", actorId: "anonymous", actorEmail: "" };
+}
+
+async function writeAuditLog({
+  action,
+  actorType = "system",
+  actorId = "system",
+  actorEmail = "",
+  targetPath = "",
+  payload = {},
+  result = {}
+}) {
+  const now = admin.firestore.Timestamp.now();
+  const normalizedAction = normalizeString(action) || "unknown.action";
+  const sanitizedPayload = (payload && typeof payload === "object") ? payload : {};
+  const sanitizedResult = (result && typeof result === "object") ? result : {};
+
+  await db.collection("auditLogs").add({
+    action: normalizedAction,
+    actorType: normalizeString(actorType) || "system",
+    actorId: normalizeString(actorId) || "system",
+    actorEmail: normalizeEmail(actorEmail),
+    targetPath: normalizeString(targetPath),
+    payload: sanitizedPayload,
+    payloadHash: createHash("sha256").update(JSON.stringify(sanitizedPayload)).digest("hex"),
+    result: sanitizedResult,
+    resultHash: createHash("sha256").update(JSON.stringify(sanitizedResult)).digest("hex"),
+    createdAt: now,
+    createdAtMs: now.toMillis()
+  });
+}
+
 function normalizeBookingDoc(docId, data = {}) {
   const rawPhaseId = normalizeString(data.phaseId) || normalizeString(data.phase) || normalizeString(data.phaseKey);
   const rawCanonicalPhaseId = normalizeString(data.phaseCanonicalId);
@@ -199,7 +559,8 @@ async function assertAdmin(request) {
 
   const record = await auth.getUser(uid);
   const email = normalizeEmail(record.email);
-  if (!ADMIN_EMAILS.has(email)) {
+  const activeSuperAdminEmails = await getActiveSuperAdminEmails();
+  if (!activeSuperAdminEmails.includes(email)) {
     throw new HttpsError("permission-denied", "Admin access required.");
   }
   return { uid, email };
@@ -321,8 +682,346 @@ async function markExpiredIfNeededInTransaction(transaction, bookingRef, booking
   return true;
 }
 
+function areStringSetsEqual(left, right) {
+  if (left.size !== right.size) {
+    return false;
+  }
+  for (const value of left) {
+    if (!right.has(value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function emitFraudSignal({
+  entityType,
+  entityId,
+  signalType,
+  severity = "medium",
+  score = 50,
+  evidence = {}
+}) {
+  const now = admin.firestore.Timestamp.now();
+  await db.collection("fraudSignals").add({
+    entityType: normalizeString(entityType),
+    entityId: normalizeString(entityId),
+    signalType: normalizeString(signalType),
+    severity: normalizeString(severity) || "medium",
+    score: Math.max(0, Number(score) || 0),
+    evidence: (evidence && typeof evidence === "object") ? evidence : {},
+    status: "open",
+    createdAt: now,
+    createdAtMs: now.toMillis()
+  });
+}
+
+async function runBookingConsistencyAndUnlockSync() {
+  const canonicalPhases = getCanonicalPhaseSequence().map((phase) => phase.phaseId);
+  const approvedPhasesByUserId = new Map();
+  const phaseReconciliation = [];
+  const now = admin.firestore.Timestamp.now();
+
+  for (const phaseId of canonicalPhases) {
+    const approvedSnapshot = await db.collection("bookings")
+      .where("phaseId", "==", phaseId)
+      .where("status", "==", BOOKING_STATUS_APPROVED)
+      .get();
+
+    const approvedCount = approvedSnapshot.size;
+    const phaseRef = db.doc(`phases/${phaseId}`);
+    const phaseSnap = await phaseRef.get();
+    const phaseData = phaseSnap.data() || {};
+    const existingBookedSeats = normalizeNumber(phaseData.bookedSeats) ?? 0;
+
+    if (existingBookedSeats !== approvedCount) {
+      await phaseRef.set({
+        ...buildCanonicalPhasePayload(phaseId),
+        ...phaseData,
+        phaseId,
+        bookedSeats: approvedCount,
+        updatedAt: now
+      }, { merge: true });
+    }
+
+    approvedSnapshot.forEach((bookingDoc) => {
+      const booking = normalizeBookingDoc(bookingDoc.id, bookingDoc.data() || {});
+      if (!booking.userId) {
+        return;
+      }
+      if (!approvedPhasesByUserId.has(booking.userId)) {
+        approvedPhasesByUserId.set(booking.userId, new Set());
+      }
+      approvedPhasesByUserId.get(booking.userId).add(phaseId);
+    });
+
+    phaseReconciliation.push({
+      phaseId,
+      approvedCount,
+      bookedSeatsBefore: existingBookedSeats,
+      bookedSeatsAfter: approvedCount
+    });
+  }
+
+  const canonicalPhaseSet = new Set(canonicalPhases);
+  const phaseOrderById = new Map(canonicalPhases.map((phaseId, index) => [phaseId, index]));
+  const usersSnapshot = await db.collection("users").get();
+  const writer = db.bulkWriter();
+  let unlockedUsersUpdated = 0;
+
+  usersSnapshot.forEach((userDoc) => {
+    const userData = userDoc.data() || {};
+    const existingUnlocked = new Set(
+      normalizeStringArray(userData.unlockedPhases)
+        .map((phaseId) => canonicalizePhaseId(phaseId))
+        .filter((phaseId) => canonicalPhaseSet.has(phaseId))
+    );
+    const authoritativeUnlocked = new Set(approvedPhasesByUserId.get(userDoc.id) || []);
+
+    if (areStringSetsEqual(existingUnlocked, authoritativeUnlocked)) {
+      return;
+    }
+
+    const orderedUnlocked = Array.from(authoritativeUnlocked)
+      .sort((left, right) => (phaseOrderById.get(left) ?? Number.MAX_SAFE_INTEGER) - (phaseOrderById.get(right) ?? Number.MAX_SAFE_INTEGER));
+
+    writer.set(userDoc.ref, {
+      unlockedPhases: orderedUnlocked,
+      updatedAt: now
+    }, { merge: true });
+    unlockedUsersUpdated += 1;
+  });
+  await writer.close();
+
+  return {
+    phaseReconciliation,
+    usersScanned: usersSnapshot.size,
+    unlockedUsersUpdated
+  };
+}
+
+async function runReferralStatsReconciliation() {
+  const now = admin.firestore.Timestamp.now();
+  const referralSnapshot = await db.collection("referralEvents").get();
+  const aggregateByReferrer = new Map();
+
+  referralSnapshot.forEach((eventDoc) => {
+    const eventData = eventDoc.data() || {};
+    const referrerId = normalizeString(eventData.referrerId);
+    if (!referrerId) {
+      return;
+    }
+    const status = normalizeString(eventData.status).toLowerCase();
+    const isConverted = eventData.isConverted === true || status === REFERRAL_EVENT_STATUS_CONVERTED || Boolean(eventData.convertedAt);
+    const current = aggregateByReferrer.get(referrerId) || { totalInvites: 0, conversions: 0 };
+    current.totalInvites += 1;
+    if (isConverted) {
+      current.conversions += 1;
+    }
+    aggregateByReferrer.set(referrerId, current);
+  });
+
+  const existingStatsSnapshot = await db.collection("affiliateStats").get();
+  const allReferrerIds = new Set(aggregateByReferrer.keys());
+  existingStatsSnapshot.forEach((statsDoc) => {
+    const statsData = statsDoc.data() || {};
+    allReferrerIds.add(normalizeString(statsData.userId) || statsDoc.id);
+  });
+
+  const writer = db.bulkWriter();
+  let updatedStatsDocs = 0;
+  allReferrerIds.forEach((referrerId) => {
+    if (!referrerId) {
+      return;
+    }
+    const aggregate = aggregateByReferrer.get(referrerId) || { totalInvites: 0, conversions: 0 };
+    writer.set(db.doc(`affiliateStats/${referrerId}`), {
+      userId: referrerId,
+      totalInvites: Math.max(0, Number(aggregate.totalInvites) || 0),
+      conversions: Math.max(0, Number(aggregate.conversions) || 0),
+      updatedAt: now,
+      updatedAtMs: now.toMillis()
+    }, { merge: true });
+    updatedStatsDocs += 1;
+  });
+  await writer.close();
+
+  return {
+    referralEventsScanned: referralSnapshot.size,
+    updatedStatsDocs
+  };
+}
+
+async function bindAffiliateSessionToUser({ sessionId, userId, referrerId }) {
+  const normalizedSessionId = normalizeSessionId(sessionId);
+  const normalizedUserId = normalizeString(userId);
+  const normalizedReferrerId = normalizeString(referrerId);
+  if (!normalizedSessionId || !normalizedUserId) {
+    return { bound: false, reason: "missing-session-or-user" };
+  }
+
+  const sessionRef = db.doc(`affiliateSessions/${normalizedSessionId}`);
+  const nowMs = Date.now();
+  const now = admin.firestore.Timestamp.fromMillis(nowMs);
+  let result = { bound: false, reason: "session-not-found" };
+
+  await db.runTransaction(async (transaction) => {
+    const sessionSnap = await transaction.get(sessionRef);
+    if (!sessionSnap.exists) {
+      result = { bound: false, reason: "session-not-found" };
+      return;
+    }
+
+    const sessionData = sessionSnap.data() || {};
+    const existingUserId = normalizeString(sessionData.userId);
+    if (existingUserId && existingUserId !== normalizedUserId) {
+      result = { bound: false, reason: "session-user-mismatch" };
+      return;
+    }
+
+    transaction.set(sessionRef, {
+      userId: normalizedUserId,
+      attributedReferrerId: normalizedReferrerId || normalizeString(sessionData.attributedReferrerId) || normalizeString(sessionData.referrerId),
+      state: "bound",
+      boundAt: now,
+      boundAtMs: nowMs,
+      updatedAt: now,
+      updatedAtMs: nowMs
+    }, { merge: true });
+    result = { bound: true, reason: "ok" };
+  });
+
+  if (result.reason === "session-user-mismatch") {
+    await emitFraudSignal({
+      entityType: "affiliateSession",
+      entityId: normalizedSessionId,
+      signalType: "session_user_mismatch",
+      severity: "high",
+      score: 90,
+      evidence: {
+        userId: normalizedUserId,
+        referrerId: normalizedReferrerId
+      }
+    });
+  }
+
+  return result;
+}
+
+async function validateAndRecordReferralConversion({
+  userId,
+  phaseId,
+  source = "web"
+}) {
+  const normalizedUserId = normalizeString(userId);
+  const normalizedPhaseId = canonicalizePhaseId(phaseId || "phase1");
+  if (!normalizedUserId) {
+    throw new HttpsError("invalid-argument", "userId is required.");
+  }
+  if (normalizedPhaseId !== "phase1") {
+    throw new HttpsError("invalid-argument", "Only phase1 conversion is supported.");
+  }
+
+  const now = admin.firestore.Timestamp.now();
+  const nowMs = now.toMillis();
+  const userRef = db.doc(`users/${normalizedUserId}`);
+  const phaseProgressRef = db.doc(`users/${normalizedUserId}/progress/phase1`);
+
+  return db.runTransaction(async (transaction) => {
+    const [userSnap, phaseProgressSnap] = await Promise.all([
+      transaction.get(userRef),
+      transaction.get(phaseProgressRef)
+    ]);
+
+    if (!userSnap.exists) {
+      return { converted: false, reason: "user-not-found", commissionCreated: false };
+    }
+
+    const userData = userSnap.data() || {};
+    const referredBy = normalizeString(userData.referredBy);
+    if (!referredBy) {
+      return { converted: false, reason: "not-referred", commissionCreated: false };
+    }
+
+    const completedPhases = new Set(
+      normalizeStringArray(userData.completedPhases).map((item) => canonicalizePhaseId(item)).filter(Boolean)
+    );
+    const progressPercent = normalizeNumber(phaseProgressSnap.data()?.progressPercent) ?? 0;
+    const isPhase1Completed = completedPhases.has("phase1") || progressPercent >= 100;
+    if (!isPhase1Completed) {
+      throw new HttpsError("failed-precondition", "Complete phase1 before conversion.");
+    }
+
+    const referralEventRef = db.doc(`referralEvents/${referredBy}_${normalizedUserId}`);
+    const affiliateStatsRef = db.doc(`affiliateStats/${referredBy}`);
+    const referralEventSnap = await transaction.get(referralEventRef);
+    const referralEventData = referralEventSnap.data() || {};
+    const alreadyConverted = Boolean(referralEventData.convertedAt) || referralEventData.isConverted === true;
+    if (alreadyConverted) {
+      return { converted: false, reason: "already-converted", commissionCreated: false, referrerId: referredBy };
+    }
+
+    transaction.set(referralEventRef, {
+      eventId: `${referredBy}_${normalizedUserId}`,
+      referrerId: referredBy,
+      userId: normalizedUserId,
+      referredUserName: normalizeString(userData.name),
+      referredUserEmail: normalizeEmail(userData.email),
+      status: REFERRAL_EVENT_STATUS_CONVERTED,
+      isConverted: true,
+      joinedAt: referralEventData.joinedAt || now,
+      convertedAt: now,
+      updatedAt: now,
+      source: normalizeString(referralEventData.source) || normalizeString(source) || "web"
+    }, { merge: true });
+
+    transaction.set(affiliateStatsRef, {
+      userId: referredBy,
+      conversions: FieldValue.increment(1),
+      updatedAt: now,
+      updatedAtMs: nowMs
+    }, { merge: true });
+
+    const commissionId = `${referredBy}_${normalizedUserId}_${normalizedPhaseId}`;
+    const commissionRef = db.doc(`affiliateCommissions/${commissionId}`);
+    const commissionSnap = await transaction.get(commissionRef);
+    let commissionCreated = false;
+    if (!commissionSnap.exists) {
+      commissionCreated = true;
+      transaction.create(commissionRef, {
+        commissionId,
+        referrerId: referredBy,
+        referredUserId: normalizedUserId,
+        attributionEventId: `${referredBy}_${normalizedUserId}`,
+        qualifiedEventId: `phase_completed:${normalizedUserId}:${normalizedPhaseId}`,
+        phaseId: normalizedPhaseId,
+        status: COMMISSION_STATUS_PENDING,
+        amountMicros: COMMISSION_DEFAULT_AMOUNT_MICROS,
+        currency: COMMISSION_DEFAULT_CURRENCY,
+        rateBps: COMMISSION_DEFAULT_RATE_BPS,
+        lockVersion: 1,
+        idempotencyKey: `conversion:${referredBy}:${normalizedUserId}:${normalizedPhaseId}`,
+        source: normalizeString(source) || "web",
+        createdAt: now,
+        createdAtMs: nowMs,
+        updatedAt: now,
+        updatedAtMs: nowMs
+      });
+    }
+
+    return {
+      converted: true,
+      reason: "ok",
+      referrerId: referredBy,
+      commissionCreated,
+      commissionId
+    };
+  });
+}
+
 export const createBooking = onCall(async (request) => {
   const uid = assertAuthenticated(request);
+  const actor = getActorFromRequest(request, "user");
   const phaseId = canonicalizePhaseId(request.data?.phaseId);
   const phoneNumber = normalizePhone(request.data?.phoneNumber);
   const whatsappNumber = normalizePhone(request.data?.whatsappNumber);
@@ -394,6 +1093,22 @@ export const createBooking = onCall(async (request) => {
     }));
   });
 
+  await writeAuditLog({
+    action: "booking.created",
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorEmail: actor.actorEmail,
+    targetPath: `bookings/${bookingId}`,
+    payload: {
+      phaseId,
+      source: normalizeString(request.data?.source) || "web"
+    },
+    result: {
+      ok: true,
+      bookingId
+    }
+  });
+
   return {
     ok: true,
     bookingId
@@ -435,6 +1150,16 @@ export const markBookingReviewing = onCall(async (request) => {
       updatedAtMs: nowMs,
       updatedAt: nowMs
     });
+  });
+
+  await writeAuditLog({
+    action: "booking.mark_reviewing",
+    actorType: "admin",
+    actorId: adminUser.uid,
+    actorEmail: adminUser.email,
+    targetPath: `bookings/${bookingId}`,
+    payload: { bookingId },
+    result: { ok: true }
   });
 
   return { ok: true };
@@ -501,6 +1226,16 @@ export const approveBooking = onCall(async (request) => {
     }, { merge: true });
   });
 
+  await writeAuditLog({
+    action: "booking.approved",
+    actorType: "admin",
+    actorId: adminUser.uid,
+    actorEmail: adminUser.email,
+    targetPath: `bookings/${bookingId}`,
+    payload: { bookingId },
+    result: { ok: true }
+  });
+
   return { ok: true };
 });
 
@@ -550,6 +1285,16 @@ export const rejectBooking = onCall(async (request) => {
   if (!outcome?.ok) {
     throw new HttpsError(outcome.code || "internal", outcome.message || "Reject booking failed.");
   }
+
+  await writeAuditLog({
+    action: "booking.rejected",
+    actorType: "admin",
+    actorId: adminUser.uid,
+    actorEmail: adminUser.email,
+    targetPath: `bookings/${bookingId}`,
+    payload: { bookingId },
+    result: { ok: true }
+  });
 
   return { ok: true };
 });
@@ -607,6 +1352,16 @@ export const cancelBooking = onCall(async (request) => {
     }, { merge: true });
   });
 
+  await writeAuditLog({
+    action: "booking.cancelled",
+    actorType: "admin",
+    actorId: adminUser.uid,
+    actorEmail: adminUser.email,
+    targetPath: `bookings/${bookingId}`,
+    payload: { bookingId },
+    result: { ok: true }
+  });
+
   return { ok: true };
 });
 
@@ -658,87 +1413,422 @@ export const expireStaleBookingsScheduled = onSchedule("every 5 minutes", async 
 });
 
 export const expireStaleBookingsNow = onCall(async (request) => {
-  await assertAdmin(request);
-  return runExpirySweep();
+  const adminUser = await assertAdmin(request);
+  const result = await runExpirySweep();
+  await writeAuditLog({
+    action: "booking.expiry_sweep.manual",
+    actorType: "admin",
+    actorId: adminUser.uid,
+    actorEmail: adminUser.email,
+    targetPath: "bookings",
+    payload: {},
+    result
+  });
+  return result;
 });
 
 export const reconcileBookingConsistency = onCall(async (request) => {
-  await assertAdmin(request);
+  const adminUser = await assertAdmin(request);
+  const result = await runBookingConsistencyAndUnlockSync();
+  await writeAuditLog({
+    action: "booking.reconcile.manual",
+    actorType: "admin",
+    actorId: adminUser.uid,
+    actorEmail: adminUser.email,
+    targetPath: "bookings,users,phases",
+    payload: {},
+    result
+  });
+  return { ok: true, ...result };
+});
 
-  const canonicalPhases = getCanonicalPhaseSequence().map((phase) => phase.phaseId);
-  const reconciliation = [];
+export const reconcileSeatsAndUnlocksScheduled = onSchedule("every 30 minutes", async () => {
+  return runBookingConsistencyAndUnlockSync();
+});
 
-  for (const phaseId of canonicalPhases) {
-    const approvedSnapshot = await db.collection("bookings")
-      .where("phaseId", "==", phaseId)
-      .where("status", "==", BOOKING_STATUS_APPROVED)
-      .get();
+export const reconcileReferralStatsNow = onCall(async (request) => {
+  const adminUser = await assertAdmin(request);
+  const result = await runReferralStatsReconciliation();
+  await writeAuditLog({
+    action: "referral_stats.reconcile.manual",
+    actorType: "admin",
+    actorId: adminUser.uid,
+    actorEmail: adminUser.email,
+    targetPath: "referralEvents,affiliateStats",
+    payload: {},
+    result
+  });
+  return { ok: true, ...result };
+});
 
-    const approvedCount = approvedSnapshot.size;
-    const phaseRef = db.doc(`phases/${phaseId}`);
-    const phaseSnap = await phaseRef.get();
-    const phaseData = phaseSnap.data() || {};
-    const existingBookedSeats = normalizeNumber(phaseData.bookedSeats) ?? 0;
+export const reconcileReferralStatsScheduled = onSchedule("every 30 minutes", async () => {
+  return runReferralStatsReconciliation();
+});
 
-    if (existingBookedSeats !== approvedCount) {
-      await phaseRef.set({
-        ...buildCanonicalPhasePayload(phaseId),
-        ...phaseData,
-        phaseId,
-        bookedSeats: approvedCount,
-        updatedAt: admin.firestore.Timestamp.now()
-      }, { merge: true });
+export const syncMyAffiliateStats = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const actor = getActorFromRequest(request, "user");
+  const userRef = db.doc(`users/${uid}`);
+  const now = admin.firestore.Timestamp.now();
+  const nowMs = now.toMillis();
+
+  const [userSnap, usersByReferrerSnap, existingEventsSnap] = await Promise.all([
+    userRef.get(),
+    db.collection("users").where("referredBy", "==", uid).get(),
+    db.collection("referralEvents").where("referrerId", "==", uid).get()
+  ]);
+
+  const userData = userSnap.data() || {};
+  const ownReferralCode = (
+    normalizeReferralCode(userData.referralCode) ||
+    normalizeReferralCode(request.data?.referralCode) ||
+    buildReferralCodeFromUid(uid)
+  );
+  if (!ownReferralCode) {
+    throw new HttpsError("failed-precondition", "Referral code is unavailable for this account.");
+  }
+
+  const [usersByCodeSnap, usersByLegacyReferredByCodeSnap] = await Promise.all([
+    db.collection("users")
+      .where("referredByCode", "==", ownReferralCode)
+      .get(),
+    db.collection("users")
+      .where("referredBy", "==", ownReferralCode)
+      .get()
+  ]);
+
+  const referredUsersById = new Map();
+  const collectReferredUser = (docSnap) => {
+    if (!docSnap?.exists || docSnap.id === uid) {
+      return;
+    }
+    const data = docSnap.data() || {};
+    const assignmentFlags = getReferralAssignmentFlagsForReferrer(data, {
+      referrerId: uid,
+      referralCode: ownReferralCode
+    });
+    if (!isReferralAssignmentMatch(assignmentFlags)) {
+      return;
+    }
+    referredUsersById.set(docSnap.id, {
+      data,
+      assignmentFlags
+    });
+  };
+
+  usersByReferrerSnap.forEach(collectReferredUser);
+  usersByCodeSnap.forEach(collectReferredUser);
+  usersByLegacyReferredByCodeSnap.forEach(collectReferredUser);
+
+  const existingEventsByUserId = new Map();
+  let existingInvites = 0;
+  let existingConversions = 0;
+  existingEventsSnap.forEach((eventDoc) => {
+    const eventData = eventDoc.data() || {};
+    const referredUserId =
+      normalizeString(eventData.userId) ||
+      normalizeString(eventData.referredUserId);
+    if (referredUserId) {
+      existingEventsByUserId.set(referredUserId, {
+        eventId: eventDoc.id,
+        data: eventData
+      });
+    }
+    existingInvites += 1;
+    const eventStatus = normalizeString(eventData.status).toLowerCase();
+    const eventIsConverted = (
+      eventData.isConverted === true ||
+      eventStatus === REFERRAL_EVENT_STATUS_CONVERTED ||
+      Boolean(eventData.convertedAt)
+    );
+    if (eventIsConverted) {
+      existingConversions += 1;
+    }
+  });
+
+  const writer = db.bulkWriter();
+  let derivedInvites = 0;
+  let derivedConversions = 0;
+  let repairedEventWrites = 0;
+  let normalizedLegacyWrites = 0;
+  let legacyAssignmentsFound = 0;
+
+  referredUsersById.forEach((entry, referredUserId) => {
+    const referredData = entry?.data || {};
+    const assignmentFlags = entry?.assignmentFlags || {};
+    const normalizedUserId = normalizeString(referredUserId);
+    if (!normalizedUserId || normalizedUserId === uid) {
+      return;
     }
 
-    const userWriter = db.bulkWriter();
-    approvedSnapshot.forEach((bookingDoc) => {
-      const booking = normalizeBookingDoc(bookingDoc.id, bookingDoc.data() || {});
-      if (booking.userId) {
-        userWriter.set(db.doc(`users/${booking.userId}`), {
-          unlockedPhases: FieldValue.arrayUnion(phaseId),
-          updatedAt: admin.firestore.Timestamp.now()
-        }, { merge: true });
-      }
-    });
-    await userWriter.close();
+    const existingEvent = existingEventsByUserId.get(normalizedUserId) || null;
+    const existingEventData = existingEvent?.data || {};
+    const existingEventStatus = normalizeString(existingEventData.status).toLowerCase();
+    const existingConvertedAtMs = toMillis(existingEventData.convertedAt);
+    const existingJoinedAtMs = toMillis(existingEventData.joinedAt);
+    const existingIsConverted = (
+      existingEventData.isConverted === true ||
+      existingEventStatus === REFERRAL_EVENT_STATUS_CONVERTED ||
+      Boolean(existingConvertedAtMs)
+    );
 
-    reconciliation.push({
-      phaseId,
-      approvedCount,
-      bookedSeatsBefore: existingBookedSeats,
-      bookedSeatsAfter: approvedCount
-    });
+    if (assignmentFlags.assignedByLegacyReferredByCode && !assignmentFlags.assignedById) {
+      legacyAssignmentsFound += 1;
+      writer.set(db.doc(`users/${normalizedUserId}`), {
+        referredBy: uid,
+        referredByCode: ownReferralCode,
+        updatedAt: now,
+        updatedAtMs: nowMs
+      }, { merge: true });
+      normalizedLegacyWrites += 1;
+    }
+
+    const impliedConverted = isReferralConvertedForSync(referredData, assignmentFlags);
+    const isConverted = existingIsConverted || impliedConverted;
+
+    const joinedAtMs = (
+      existingJoinedAtMs ??
+      toMillis(referredData.pendingReferralReviewedAt) ??
+      toMillis(referredData.createdAt) ??
+      toMillis(referredData.updatedAt) ??
+      nowMs
+    );
+    const joinedAt = admin.firestore.Timestamp.fromMillis(Math.max(0, Number(joinedAtMs) || nowMs));
+    const convertedAt = existingConvertedAtMs
+      ? admin.firestore.Timestamp.fromMillis(Math.max(0, Number(existingConvertedAtMs)))
+      : now;
+
+    derivedInvites += 1;
+    if (isConverted) {
+      derivedConversions += 1;
+    }
+
+    writer.set(db.doc(`referralEvents/${uid}_${normalizedUserId}`), {
+      eventId: `${uid}_${normalizedUserId}`,
+      referrerId: uid,
+      userId: normalizedUserId,
+      referredUserName: normalizeString(referredData.name) || normalizeString(existingEventData.referredUserName),
+      referredUserEmail: normalizeEmail(referredData.email) || normalizeEmail(existingEventData.referredUserEmail),
+      status: isConverted ? REFERRAL_EVENT_STATUS_CONVERTED : REFERRAL_EVENT_STATUS_JOINED,
+      isConverted,
+      joinedAt,
+      convertedAt: isConverted ? convertedAt : FieldValue.delete(),
+      source: normalizeString(existingEventData.source) || "sync",
+      updatedAt: now
+    }, { merge: true });
+    repairedEventWrites += 1;
+  });
+
+  const totalInvites = Math.max(derivedInvites, existingInvites);
+  const conversions = Math.max(derivedConversions, existingConversions);
+
+  writer.set(db.doc(`affiliateStats/${uid}`), {
+    userId: uid,
+    totalInvites,
+    invites: totalInvites,
+    conversions,
+    updatedAt: now,
+    updatedAtMs: nowMs,
+    lastSyncedAt: now,
+    lastSyncedAtMs: nowMs
+  }, { merge: true });
+
+  writer.set(userRef, {
+    referralCode: normalizeReferralCode(userData.referralCode) || ownReferralCode,
+    totalInvites,
+    invites: totalInvites,
+    conversions,
+    updatedAt: now,
+    updatedAtMs: nowMs
+  }, { merge: true });
+
+  await writer.close();
+
+  await writeAuditLog({
+    action: "referral.stats_synced_by_user",
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorEmail: actor.actorEmail,
+    targetPath: `affiliateStats/${uid}`,
+    payload: {
+      referralCode: ownReferralCode,
+      referredUsersScanned: referredUsersById.size,
+      existingInvites,
+      existingConversions
+    },
+    result: {
+      ok: true,
+      totalInvites,
+      conversions,
+      repairedEventWrites,
+      normalizedLegacyWrites
+    }
+  });
+
+  return {
+    ok: true,
+    referralCode: ownReferralCode,
+    totalInvites,
+    conversions,
+    repairedEventWrites,
+    normalizedLegacyWrites,
+    legacyAssignmentsFound,
+    referredUsersScanned: referredUsersById.size
+  };
+});
+
+export const getSuperAdminProfile = onCall(async () => {
+  const profile = await buildSuperAdminProfileResponse();
+  if (!profile.superAdminEmail && !profile.referralCode) {
+    throw new HttpsError("not-found", "Super admin profile not found.");
   }
 
   return {
     ok: true,
-    reconciliation
+    superAdminEmail: profile.superAdminEmail || null,
+    superAdminEmails: profile.superAdminEmails,
+    referralCode: profile.referralCode || null
+  };
+});
+
+export const getAdminReferralCode = onCall(async () => {
+  const profile = await buildSuperAdminProfileResponse();
+  if (!profile.referralCode) {
+    throw new HttpsError("not-found", "Admin referral code not found.");
+  }
+
+  return {
+    ok: true,
+    referralCode: profile.referralCode,
+    adminEmail: profile.superAdminEmail || null,
+    superAdminEmail: profile.superAdminEmail || null,
+    superAdminEmails: profile.superAdminEmails
+  };
+});
+
+export const trackAffiliateClick = onCall(async (request) => {
+  const requestedReferralCode = normalizeReferralCode(request.data?.referralCode);
+  if (!requestedReferralCode) {
+    throw new HttpsError("invalid-argument", "Valid referralCode is required.");
+  }
+
+  const resolvedReferrer = await resolveReferrerByReferralCode(requestedReferralCode);
+  if (!resolvedReferrer) {
+    throw new HttpsError("not-found", "Referral code not found.");
+  }
+
+  const referrerId = resolvedReferrer.referrerDoc.id;
+  const referralCode = resolvedReferrer.resolvedReferralCode;
+  const sessionId = normalizeSessionId(request.data?.sessionId) || randomUUID().replace(/-/g, "");
+  const campaignId = normalizeCampaignId(request.data?.campaignId);
+  const landingPath = normalizeString(request.data?.landingPath) || "/";
+  const source = normalizeString(request.data?.source) || "web";
+  const rawUserAgent = normalizeString(request?.rawRequest?.headers?.["user-agent"]);
+  const userAgentHash = hashValue(rawUserAgent);
+  const ipHash = hashValue(normalizeIpFromRequest(request));
+  const nowMs = Date.now();
+  const now = admin.firestore.Timestamp.fromMillis(nowMs);
+  const expiresAtMs = nowMs + AFFILIATE_SESSION_TTL_MS;
+
+  const clickRef = db.collection("affiliateClicks").doc();
+  const sessionRef = db.doc(`affiliateSessions/${sessionId}`);
+  await db.runTransaction(async (transaction) => {
+    const sessionSnap = await transaction.get(sessionRef);
+    const sessionData = sessionSnap.data() || {};
+    const existingClickCount = normalizeNumber(sessionData.clickCount) ?? 0;
+    const firstSeenAtMs = toMillis(sessionData.firstSeenAt) ?? nowMs;
+    const firstClickId = normalizeString(sessionData.firstClickId) || clickRef.id;
+
+    transaction.set(clickRef, {
+      clickId: clickRef.id,
+      sessionId,
+      referralCode,
+      referrerId,
+      campaignId: campaignId || null,
+      source,
+      landingPath,
+      userAgentHash,
+      ipHash,
+      createdAt: now,
+      createdAtMs: nowMs
+    });
+
+    transaction.set(sessionRef, {
+      sessionId,
+      referralCode,
+      referrerId,
+      campaignId: campaignId || null,
+      source,
+      state: normalizeString(sessionData.state) || "open",
+      firstClickId,
+      lastClickId: clickRef.id,
+      clickCount: existingClickCount + 1,
+      firstSeenAt: admin.firestore.Timestamp.fromMillis(firstSeenAtMs),
+      firstSeenAtMs,
+      lastSeenAt: now,
+      lastSeenAtMs: nowMs,
+      expiresAt: admin.firestore.Timestamp.fromMillis(expiresAtMs),
+      expiresAtMs,
+      userId: normalizeString(sessionData.userId) || null,
+      attributedReferrerId: normalizeString(sessionData.attributedReferrerId) || referrerId,
+      updatedAt: now,
+      updatedAtMs: nowMs
+    }, { merge: true });
+  });
+
+  await writeAuditLog({
+    action: "affiliate.click_tracked",
+    actorType: "anonymous",
+    actorId: "anonymous",
+    actorEmail: "",
+    targetPath: `affiliateClicks/${clickRef.id}`,
+    payload: {
+      referralCode,
+      requestedReferralCode,
+      referrerId,
+      sessionId,
+      campaignId: campaignId || null,
+      source
+    },
+    result: {
+      ok: true,
+      clickId: clickRef.id
+    }
+  });
+
+  return {
+    ok: true,
+    clickId: clickRef.id,
+    sessionId,
+    referrerId
   };
 });
 
 export const applyReferralCode = onCall(async (request) => {
   const uid = assertAuthenticated(request);
-  const referralCode = normalizeReferralCode(request.data?.referralCode);
-  if (!referralCode) {
+  const actor = getActorFromRequest(request, "user");
+  const requestedReferralCode = normalizeReferralCode(request.data?.referralCode);
+  const sessionId = normalizeSessionId(request.data?.sessionId);
+  if (!requestedReferralCode) {
     throw new HttpsError("invalid-argument", "Valid referralCode is required.");
   }
 
   const selfReferralCode = buildReferralCodeFromUid(uid);
-  if (referralCode === selfReferralCode) {
+  if (requestedReferralCode === selfReferralCode) {
     throw new HttpsError("invalid-argument", "You cannot use your own referral code.");
   }
 
-  const referrerSnapshot = await db.collection("users")
-    .where("referralCode", "==", referralCode)
-    .limit(1)
-    .get();
-
-  if (referrerSnapshot.empty) {
+  const resolvedReferrer = await resolveReferrerByReferralCode(requestedReferralCode);
+  if (!resolvedReferrer) {
     throw new HttpsError("not-found", "Referral code not found.");
   }
 
-  const referrerDoc = referrerSnapshot.docs[0];
+  const referrerDoc = resolvedReferrer.referrerDoc;
   const referrerId = referrerDoc.id;
+  const referrerData = referrerDoc.data() || {};
+  const referrerName = normalizeString(referrerData.name) || "Unknown Referrer";
+  const referrerEmail = normalizeEmail(referrerData.email);
+  const referrerCode = resolvedReferrer.resolvedReferralCode;
   if (referrerId === uid) {
     throw new HttpsError("invalid-argument", "You cannot use your own referral code.");
   }
@@ -747,6 +1837,7 @@ export const applyReferralCode = onCall(async (request) => {
   const userRef = db.doc(`users/${uid}`);
   const referralEventRef = db.doc(`referralEvents/${referrerId}_${uid}`);
   const affiliateStatsRef = db.doc(`affiliateStats/${referrerId}`);
+  const nowMs = now.toMillis();
 
   await db.runTransaction(async (transaction) => {
     const [userSnap, referralEventSnap] = await Promise.all([
@@ -762,6 +1853,21 @@ export const applyReferralCode = onCall(async (request) => {
 
     const userPatch = {
       referralCode: normalizeReferralCode(userData.referralCode) || selfReferralCode,
+      referredByName: referrerName,
+      referredByEmail: referrerEmail,
+      referredByCode: referrerCode,
+      pendingReferralStatus: REFERRAL_APPROVAL_STATUS_APPROVED,
+      pendingReferralLastCode: referrerCode,
+      pendingReferralLastReferrerId: referrerId,
+      pendingReferralLastReferrerName: referrerName,
+      pendingReferralLastReferrerEmail: referrerEmail,
+      pendingReferralCode: FieldValue.delete(),
+      pendingReferralReferrerId: FieldValue.delete(),
+      pendingReferralReferrerName: FieldValue.delete(),
+      pendingReferralReferrerEmail: FieldValue.delete(),
+      pendingReferralRequestId: FieldValue.delete(),
+      pendingReferralRequestedAt: FieldValue.delete(),
+      pendingReferralRequestedAtMs: FieldValue.delete(),
       updatedAt: now
     };
     if (!existingReferredBy) {
@@ -776,7 +1882,7 @@ export const applyReferralCode = onCall(async (request) => {
         userId: uid,
         referredUserName: normalizeString(request.auth?.token?.name),
         referredUserEmail: normalizeEmail(request.auth?.token?.email),
-        status: "joined",
+        status: REFERRAL_EVENT_STATUS_JOINED,
         isConverted: false,
         joinedAt: now,
         updatedAt: now,
@@ -786,84 +1892,439 @@ export const applyReferralCode = onCall(async (request) => {
       transaction.set(affiliateStatsRef, {
         userId: referrerId,
         totalInvites: FieldValue.increment(1),
-        updatedAt: now
+        updatedAt: now,
+        updatedAtMs: nowMs
       }, { merge: true });
+    }
+  });
+
+  let sessionBinding = { bound: false, reason: "not-requested" };
+  if (sessionId) {
+    sessionBinding = await bindAffiliateSessionToUser({
+      sessionId,
+      userId: uid,
+      referrerId
+    });
+  }
+
+  await writeAuditLog({
+    action: "referral.code_applied",
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorEmail: actor.actorEmail,
+    targetPath: `referralEvents/${referrerId}_${uid}`,
+    payload: {
+      referralCode: requestedReferralCode,
+      resolvedReferralCode: referrerCode,
+      referrerId,
+      referrerCode,
+      sessionId: sessionId || null,
+      sessionBound: sessionBinding.bound,
+      sessionBindingReason: sessionBinding.reason
+    },
+    result: {
+      ok: true,
+      referredBy: referrerId,
+      referredByCode: referrerCode,
+      sessionBound: sessionBinding.bound
     }
   });
 
   return {
     ok: true,
     referredBy: referrerId,
-    referralCode: selfReferralCode
+    referredByName: referrerName,
+    referredByEmail: referrerEmail,
+    referredByCode: referrerCode,
+    referralCode: selfReferralCode,
+    sessionId: sessionId || null,
+    sessionBound: sessionBinding.bound,
+    sessionBindingReason: sessionBinding.reason
+  };
+});
+
+export const requestReferralApproval = onCall(async (request) => {
+  const uid = assertAuthenticated(request);
+  const actor = getActorFromRequest(request, "user");
+  const requestedReferralCode = normalizeReferralCode(request.data?.referralCode);
+  const sessionId = normalizeSessionId(request.data?.sessionId);
+  const source = normalizeString(request.data?.source) || "web";
+  if (!requestedReferralCode) {
+    throw new HttpsError("invalid-argument", "Valid referralCode is required.");
+  }
+
+  const selfReferralCode = buildReferralCodeFromUid(uid);
+  if (requestedReferralCode === selfReferralCode) {
+    throw new HttpsError("invalid-argument", "You cannot use your own referral code.");
+  }
+
+  const resolvedReferrer = await resolveReferrerByReferralCode(requestedReferralCode);
+  if (!resolvedReferrer) {
+    throw new HttpsError("not-found", "Referral code not found.");
+  }
+
+  const referrerDoc = resolvedReferrer.referrerDoc;
+  const referrerId = referrerDoc.id;
+  const referrerData = referrerDoc.data() || {};
+  const referrerName = normalizeString(referrerData.name) || "Unknown Referrer";
+  const referrerEmail = normalizeEmail(referrerData.email);
+  const referrerCode = resolvedReferrer.resolvedReferralCode;
+
+  if (referrerId === uid) {
+    throw new HttpsError("invalid-argument", "You cannot use your own referral code.");
+  }
+
+  const now = admin.firestore.Timestamp.now();
+  const nowMs = now.toMillis();
+  const userRef = db.doc(`users/${uid}`);
+  const referralApprovalRef = db.doc(`${REFERRAL_APPROVAL_COLLECTION}/${uid}`);
+
+  await db.runTransaction(async (transaction) => {
+    const [userSnap, approvalSnap] = await Promise.all([
+      transaction.get(userRef),
+      transaction.get(referralApprovalRef)
+    ]);
+
+    const userData = userSnap.data() || {};
+    const existingReferredBy = normalizeString(userData.referredBy);
+    if (existingReferredBy) {
+      throw new HttpsError("failed-precondition", "Referral code is already assigned.");
+    }
+
+    const existingApproval = normalizeReferralApprovalRequestDoc(
+      approvalSnap.id,
+      approvalSnap.data() || {}
+    );
+    const createdAt = existingApproval.createdAtMs
+      ? admin.firestore.Timestamp.fromMillis(existingApproval.createdAtMs)
+      : now;
+    const createdAtMs = existingApproval.createdAtMs ?? nowMs;
+
+    transaction.set(userRef, {
+      referralCode: normalizeReferralCode(userData.referralCode) || selfReferralCode,
+      pendingReferralCode: referrerCode,
+      pendingReferralStatus: REFERRAL_APPROVAL_STATUS_PENDING,
+      pendingReferralReferrerId: referrerId,
+      pendingReferralReferrerName: referrerName,
+      pendingReferralReferrerEmail: referrerEmail,
+      pendingReferralLastCode: referrerCode,
+      pendingReferralLastReferrerId: referrerId,
+      pendingReferralLastReferrerName: referrerName,
+      pendingReferralLastReferrerEmail: referrerEmail,
+      pendingReferralRequestId: uid,
+      pendingReferralRequestedAt: now,
+      pendingReferralRequestedAtMs: nowMs,
+      updatedAt: now
+    }, { merge: true });
+
+    transaction.set(referralApprovalRef, {
+      requestId: uid,
+      requesterId: uid,
+      requesterName: normalizeString(request.auth?.token?.name) || normalizeString(userData.name),
+      requesterEmail: normalizeEmail(request.auth?.token?.email) || normalizeEmail(userData.email),
+      requesterPhone: normalizeString(userData.phoneNumber || userData.phone),
+      requesterWhatsApp: normalizeString(userData.whatsappNumber || userData.whatsapp),
+      referralCode: requestedReferralCode,
+      resolvedReferralCode: referrerCode,
+      referrerId,
+      referrerName,
+      referrerEmail,
+      status: REFERRAL_APPROVAL_STATUS_PENDING,
+      source,
+      sessionId: sessionId || null,
+      createdAt,
+      createdAtMs,
+      reviewedAt: FieldValue.delete(),
+      reviewedAtMs: FieldValue.delete(),
+      reviewedBy: FieldValue.delete(),
+      reviewedByEmail: FieldValue.delete(),
+      reviewReason: FieldValue.delete(),
+      updatedAt: now,
+      updatedAtMs: nowMs
+    }, { merge: true });
+  });
+
+  await writeAuditLog({
+    action: "referral.approval_requested",
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorEmail: actor.actorEmail,
+    targetPath: `${REFERRAL_APPROVAL_COLLECTION}/${uid}`,
+    payload: {
+      referralCode: requestedReferralCode,
+      resolvedReferralCode: referrerCode,
+      referrerId,
+      sessionId: sessionId || null,
+      source
+    },
+    result: {
+      ok: true,
+      status: REFERRAL_APPROVAL_STATUS_PENDING,
+      requestId: uid
+    }
+  });
+
+  return {
+    ok: true,
+    status: REFERRAL_APPROVAL_STATUS_PENDING,
+    requestId: uid,
+    referralCode: selfReferralCode,
+    pendingReferralCode: referrerCode,
+    referrerId,
+    referrerName,
+    referrerEmail
+  };
+});
+
+export const listReferralApprovalRequests = onCall(async (request) => {
+  await assertAdmin(request);
+
+  const statusFilter = normalizeReferralApprovalStatus(request.data?.status || REFERRAL_APPROVAL_STATUS_PENDING);
+  const snapshot = await db.collection(REFERRAL_APPROVAL_COLLECTION)
+    .where("status", "==", statusFilter)
+    .limit(250)
+    .get();
+
+  const requests = snapshot.docs
+    .map((docSnap) => normalizeReferralApprovalRequestDoc(docSnap.id, docSnap.data() || {}))
+    .sort((left, right) => {
+      const leftTime = left.updatedAtMs ?? left.createdAtMs ?? 0;
+      const rightTime = right.updatedAtMs ?? right.createdAtMs ?? 0;
+      return rightTime - leftTime;
+    });
+
+  return {
+    ok: true,
+    status: statusFilter,
+    requests
+  };
+});
+
+export const reviewReferralApprovalRequest = onCall(async (request) => {
+  const adminUser = await assertAdmin(request);
+  const actor = getActorFromRequest(request, "admin");
+  const requestId = normalizeString(request.data?.requestId || request.data?.userId);
+  const decision = normalizeString(request.data?.decision).toLowerCase();
+  const reviewReason = normalizeString(request.data?.reason || request.data?.reviewReason).slice(0, 300);
+
+  if (!requestId) {
+    throw new HttpsError("invalid-argument", "requestId is required.");
+  }
+  if (decision !== REFERRAL_APPROVAL_STATUS_APPROVED && decision !== REFERRAL_APPROVAL_STATUS_REJECTED) {
+    throw new HttpsError("invalid-argument", "decision must be either 'approved' or 'rejected'.");
+  }
+
+  const referralApprovalRef = db.doc(`${REFERRAL_APPROVAL_COLLECTION}/${requestId}`);
+  const now = admin.firestore.Timestamp.now();
+  const nowMs = now.toMillis();
+
+  let reviewResult = null;
+  let sessionIdForBinding = "";
+  let requesterIdForBinding = "";
+  let referrerIdForBinding = "";
+
+  await db.runTransaction(async (transaction) => {
+    const approvalSnap = await transaction.get(referralApprovalRef);
+    if (!approvalSnap.exists) {
+      throw new HttpsError("not-found", "Referral approval request not found.");
+    }
+
+    const approval = normalizeReferralApprovalRequestDoc(approvalSnap.id, approvalSnap.data() || {});
+    if (approval.status !== REFERRAL_APPROVAL_STATUS_PENDING) {
+      throw new HttpsError("failed-precondition", "Referral approval request is already reviewed.");
+    }
+
+    const requesterId = normalizeString(approval.requesterId || approval.requestId);
+    if (!requesterId) {
+      throw new HttpsError("failed-precondition", "Requester account is missing.");
+    }
+
+    const requesterRef = db.doc(`users/${requesterId}`);
+    const requesterSnap = await transaction.get(requesterRef);
+    const requesterData = requesterSnap.data() || {};
+
+    if (decision === REFERRAL_APPROVAL_STATUS_APPROVED) {
+      const referrerId = normalizeString(approval.referrerId);
+      const referrerCode = normalizeReferralCode(approval.resolvedReferralCode || approval.referralCode);
+      if (!referrerId || !referrerCode) {
+        throw new HttpsError("failed-precondition", "Referral request data is incomplete.");
+      }
+      if (requesterId === referrerId) {
+        throw new HttpsError("failed-precondition", "User cannot refer themselves.");
+      }
+
+      const existingReferredBy = normalizeString(requesterData.referredBy);
+      if (existingReferredBy && existingReferredBy !== referrerId) {
+        throw new HttpsError("failed-precondition", "Referral code is already assigned.");
+      }
+
+      const referralEventRef = db.doc(`referralEvents/${referrerId}_${requesterId}`);
+      const affiliateStatsRef = db.doc(`affiliateStats/${referrerId}`);
+      const referralEventSnap = await transaction.get(referralEventRef);
+
+      transaction.set(requesterRef, {
+        referralCode: normalizeReferralCode(requesterData.referralCode) || buildReferralCodeFromUid(requesterId),
+        referredBy: existingReferredBy || referrerId,
+        referredByName: normalizeString(approval.referrerName),
+        referredByEmail: normalizeEmail(approval.referrerEmail),
+        referredByCode: referrerCode,
+        pendingReferralStatus: REFERRAL_APPROVAL_STATUS_APPROVED,
+        pendingReferralLastCode: referrerCode,
+        pendingReferralLastReferrerId: referrerId,
+        pendingReferralLastReferrerName: normalizeString(approval.referrerName),
+        pendingReferralLastReferrerEmail: normalizeEmail(approval.referrerEmail),
+        pendingReferralCode: FieldValue.delete(),
+        pendingReferralReferrerId: FieldValue.delete(),
+        pendingReferralReferrerName: FieldValue.delete(),
+        pendingReferralReferrerEmail: FieldValue.delete(),
+        pendingReferralRequestId: FieldValue.delete(),
+        pendingReferralRequestedAt: FieldValue.delete(),
+        pendingReferralRequestedAtMs: FieldValue.delete(),
+        updatedAt: now
+      }, { merge: true });
+
+      if (!referralEventSnap.exists) {
+        transaction.set(referralEventRef, {
+          eventId: `${referrerId}_${requesterId}`,
+          referrerId,
+          userId: requesterId,
+          referredUserName: normalizeString(requesterData.name) || normalizeString(approval.requesterName),
+          referredUserEmail: normalizeEmail(requesterData.email) || normalizeEmail(approval.requesterEmail),
+          status: REFERRAL_EVENT_STATUS_JOINED,
+          isConverted: false,
+          joinedAt: now,
+          updatedAt: now,
+          source: normalizeString(approval.source) || "web"
+        }, { merge: true });
+
+        transaction.set(affiliateStatsRef, {
+          userId: referrerId,
+          totalInvites: FieldValue.increment(1),
+          updatedAt: now,
+          updatedAtMs: nowMs
+        }, { merge: true });
+      }
+
+      transaction.set(referralApprovalRef, {
+        status: REFERRAL_APPROVAL_STATUS_APPROVED,
+        reviewedAt: now,
+        reviewedAtMs: nowMs,
+        reviewedBy: adminUser.uid,
+        reviewedByEmail: adminUser.email,
+        reviewReason: reviewReason || null,
+        updatedAt: now,
+        updatedAtMs: nowMs
+      }, { merge: true });
+
+      sessionIdForBinding = approval.sessionId;
+      requesterIdForBinding = requesterId;
+      referrerIdForBinding = referrerId;
+
+      reviewResult = {
+        ok: true,
+        status: REFERRAL_APPROVAL_STATUS_APPROVED,
+        requestId: approval.requestId,
+        requesterId,
+        referredBy: referrerId,
+        referredByCode: referrerCode
+      };
+      return;
+    }
+
+    transaction.set(requesterRef, {
+      referralCode: normalizeReferralCode(requesterData.referralCode) || buildReferralCodeFromUid(requesterId),
+      pendingReferralStatus: REFERRAL_APPROVAL_STATUS_REJECTED,
+      pendingReferralLastCode: normalizeReferralCode(approval.resolvedReferralCode || approval.referralCode),
+      pendingReferralLastReferrerId: normalizeString(approval.referrerId),
+      pendingReferralLastReferrerName: normalizeString(approval.referrerName),
+      pendingReferralLastReferrerEmail: normalizeEmail(approval.referrerEmail),
+      pendingReferralCode: FieldValue.delete(),
+      pendingReferralReferrerId: FieldValue.delete(),
+      pendingReferralReferrerName: FieldValue.delete(),
+      pendingReferralReferrerEmail: FieldValue.delete(),
+      pendingReferralRequestId: FieldValue.delete(),
+      pendingReferralRequestedAt: FieldValue.delete(),
+      pendingReferralRequestedAtMs: FieldValue.delete(),
+      updatedAt: now
+    }, { merge: true });
+
+    transaction.set(referralApprovalRef, {
+      status: REFERRAL_APPROVAL_STATUS_REJECTED,
+      reviewedAt: now,
+      reviewedAtMs: nowMs,
+      reviewedBy: adminUser.uid,
+      reviewedByEmail: adminUser.email,
+      reviewReason: reviewReason || null,
+      updatedAt: now,
+      updatedAtMs: nowMs
+    }, { merge: true });
+
+    reviewResult = {
+      ok: true,
+      status: REFERRAL_APPROVAL_STATUS_REJECTED,
+      requestId: approval.requestId,
+      requesterId
+    };
+  });
+
+  let sessionBinding = { bound: false, reason: "not-requested" };
+  if (
+    decision === REFERRAL_APPROVAL_STATUS_APPROVED &&
+    sessionIdForBinding &&
+    requesterIdForBinding &&
+    referrerIdForBinding
+  ) {
+    sessionBinding = await bindAffiliateSessionToUser({
+      sessionId: sessionIdForBinding,
+      userId: requesterIdForBinding,
+      referrerId: referrerIdForBinding
+    });
+  }
+
+  await writeAuditLog({
+    action: "referral.approval_reviewed",
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorEmail: actor.actorEmail,
+    targetPath: `${REFERRAL_APPROVAL_COLLECTION}/${requestId}`,
+    payload: {
+      requestId,
+      decision,
+      reviewReason: reviewReason || null,
+      sessionId: sessionIdForBinding || null
+    },
+    result: {
+      ...(reviewResult || { ok: false }),
+      sessionBound: sessionBinding.bound,
+      sessionBindingReason: sessionBinding.reason
+    }
+  });
+
+  return {
+    ...(reviewResult || { ok: false }),
+    sessionBound: sessionBinding.bound,
+    sessionBindingReason: sessionBinding.reason
   };
 });
 
 export const markReferralConversion = onCall(async (request) => {
   const uid = assertAuthenticated(request);
+  const actor = getActorFromRequest(request, "user");
   const phaseId = canonicalizePhaseId(request.data?.phaseId || "phase1");
-  if (phaseId !== "phase1") {
-    throw new HttpsError("invalid-argument", "Only phase1 conversion is supported.");
-  }
+  const result = await validateAndRecordReferralConversion({
+    userId: uid,
+    phaseId,
+    source: normalizeString(request.data?.source) || "web"
+  });
 
-  const now = admin.firestore.Timestamp.now();
-  const userRef = db.doc(`users/${uid}`);
-  const phaseProgressRef = db.doc(`users/${uid}/progress/phase1`);
-
-  const result = await db.runTransaction(async (transaction) => {
-    const [userSnap, phaseProgressSnap] = await Promise.all([
-      transaction.get(userRef),
-      transaction.get(phaseProgressRef)
-    ]);
-
-    if (!userSnap.exists) {
-      return { converted: false, reason: "user-not-found" };
-    }
-
-    const userData = userSnap.data() || {};
-    const referredBy = normalizeString(userData.referredBy);
-    if (!referredBy) {
-      return { converted: false, reason: "not-referred" };
-    }
-
-    const completedPhases = new Set(
-      normalizeStringArray(userData.completedPhases).map((item) => canonicalizePhaseId(item)).filter(Boolean)
-    );
-    const progressPercent = normalizeNumber(phaseProgressSnap.data()?.progressPercent) ?? 0;
-    const isPhase1Completed = completedPhases.has("phase1") || progressPercent >= 100;
-    if (!isPhase1Completed) {
-      throw new HttpsError("failed-precondition", "Complete phase1 before conversion.");
-    }
-
-    const referralEventRef = db.doc(`referralEvents/${referredBy}_${uid}`);
-    const affiliateStatsRef = db.doc(`affiliateStats/${referredBy}`);
-    const referralEventSnap = await transaction.get(referralEventRef);
-    const referralEventData = referralEventSnap.data() || {};
-    const alreadyConverted = Boolean(referralEventData.convertedAt) || referralEventData.isConverted === true;
-    if (alreadyConverted) {
-      return { converted: false, reason: "already-converted" };
-    }
-
-    transaction.set(referralEventRef, {
-      eventId: `${referredBy}_${uid}`,
-      referrerId: referredBy,
-      userId: uid,
-      referredUserName: normalizeString(userData.name),
-      referredUserEmail: normalizeEmail(userData.email),
-      status: "converted",
-      isConverted: true,
-      joinedAt: referralEventData.joinedAt || now,
-      convertedAt: now,
-      updatedAt: now,
-      source: referralEventData.source || "web"
-    }, { merge: true });
-
-    transaction.set(affiliateStatsRef, {
-      userId: referredBy,
-      conversions: FieldValue.increment(1),
-      updatedAt: now
-    }, { merge: true });
-
-    return { converted: true, reason: "ok" };
+  await writeAuditLog({
+    action: "referral.conversion_marked",
+    actorType: actor.actorType,
+    actorId: actor.actorId,
+    actorEmail: actor.actorEmail,
+    targetPath: `referralEvents/${normalizeString(result.referrerId)}_${uid}`,
+    payload: { phaseId },
+    result
   });
 
   return {
@@ -907,6 +2368,7 @@ async function deleteDocumentTree(docRef, queueDelete) {
 
 export const deleteAccountCascade = onCall(async (request) => {
   const uid = assertAuthenticated(request);
+  const actor = getActorFromRequest(request, "user");
   const confirmation = normalizeString(request.data?.confirmation);
   if (confirmation !== "DELETE") {
     throw new HttpsError("invalid-argument", "Confirmation token must be DELETE.");
@@ -933,13 +2395,27 @@ export const deleteAccountCascade = onCall(async (request) => {
       referralByUserDocs,
       referralByReferredUserDocs,
       referralByReferrerDocs,
-      affiliateByUserDocs
+      affiliateByUserDocs,
+      affiliateSessionByUserDocs,
+      affiliateSessionByReferrerDocs,
+      affiliateClicksByReferrerDocs,
+      commissionByReferredDocs,
+      commissionByReferrerDocs,
+      payoutByReferrerDocs,
+      campaignByOwnerDocs
     ] = await Promise.all([
       collectDocsForUserIds("bookings", ["userId", "uid"], uid),
       collectDocsForUserIds("referralEvents", "userId", uid),
       collectDocsForUserIds("referralEvents", "referredUserId", uid),
       collectDocsForUserIds("referralEvents", "referrerId", uid),
-      collectDocsForUserIds("affiliateStats", "userId", uid)
+      collectDocsForUserIds("affiliateStats", "userId", uid),
+      collectDocsForUserIds("affiliateSessions", "userId", uid),
+      collectDocsForUserIds("affiliateSessions", ["referrerId", "attributedReferrerId"], uid),
+      collectDocsForUserIds("affiliateClicks", "referrerId", uid),
+      collectDocsForUserIds("affiliateCommissions", "referredUserId", uid),
+      collectDocsForUserIds("affiliateCommissions", "referrerId", uid),
+      collectDocsForUserIds("affiliatePayouts", "referrerId", uid),
+      collectDocsForUserIds("affiliateCampaigns", "ownerReferrerId", uid)
     ]);
 
     bookingDocs.forEach((docSnap) => queueDelete(docSnap.ref));
@@ -947,15 +2423,27 @@ export const deleteAccountCascade = onCall(async (request) => {
     referralByReferredUserDocs.forEach((docSnap) => queueDelete(docSnap.ref));
     referralByReferrerDocs.forEach((docSnap) => queueDelete(docSnap.ref));
     affiliateByUserDocs.forEach((docSnap) => queueDelete(docSnap.ref));
+    affiliateSessionByUserDocs.forEach((docSnap) => queueDelete(docSnap.ref));
+    affiliateSessionByReferrerDocs.forEach((docSnap) => queueDelete(docSnap.ref));
+    affiliateClicksByReferrerDocs.forEach((docSnap) => queueDelete(docSnap.ref));
+    commissionByReferredDocs.forEach((docSnap) => queueDelete(docSnap.ref));
+    commissionByReferrerDocs.forEach((docSnap) => queueDelete(docSnap.ref));
+    payoutByReferrerDocs.forEach((docSnap) => queueDelete(docSnap.ref));
+    campaignByOwnerDocs.forEach((docSnap) => queueDelete(docSnap.ref));
 
     const affiliateDocById = db.doc(`affiliateStats/${uid}`);
-    const [affiliateByIdSnap, userSnap] = await Promise.all([
+    const referralApprovalDocById = db.doc(`${REFERRAL_APPROVAL_COLLECTION}/${uid}`);
+    const [affiliateByIdSnap, referralApprovalByIdSnap, userSnap] = await Promise.all([
       affiliateDocById.get(),
+      referralApprovalDocById.get(),
       userRef.get()
     ]);
 
     if (affiliateByIdSnap.exists) {
       queueDelete(affiliateDocById);
+    }
+    if (referralApprovalByIdSnap.exists) {
+      queueDelete(referralApprovalDocById);
     }
 
     if (userSnap.exists) {
@@ -977,6 +2465,20 @@ export const deleteAccountCascade = onCall(async (request) => {
         throw error;
       }
     }
+
+    await writeAuditLog({
+      action: "account.deleted_cascade",
+      actorType: actor.actorType,
+      actorId: actor.actorId,
+      actorEmail: actor.actorEmail,
+      targetPath: `users/${uid}`,
+      payload: { requestedBy: uid },
+      result: {
+        ok: true,
+        deletedCount: deletedPaths.length,
+        deletedPathSample: deletedPaths.slice(0, 50)
+      }
+    });
 
     return {
       ok: true,

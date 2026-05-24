@@ -449,6 +449,7 @@ export function buildOperationalAnalytics(snapshot, options = {}) {
   const lessonDocs = snapshot.lessonDocs || [];
   const referralEvents = snapshot.referralEvents || [];
   const affiliateStats = snapshot.affiliateStats || [];
+  const affiliateCommissions = snapshot.affiliateCommissions || [];
 
   const userById = new Map(users.map((user) => [user.userId, user]));
   const bookingByUser = groupByUser(bookings, (booking) => booking.userId);
@@ -824,9 +825,26 @@ export function buildOperationalAnalytics(snapshot, options = {}) {
   const totalConversions = referralEvents.filter((event) => event.isConverted).length;
   const referralConversionRate = totalInvites > 0 ? (totalConversions / totalInvites) * 100 : 0;
 
-  const estimatedRevenue = bookings
-    .filter((booking) => getEffectiveBookingStatus(booking, nowMs) === BOOKING_STATUS.approved)
-    .reduce((sum, booking) => sum + Number(booking.revenue || 0), 0);
+  const commissionTotals = affiliateCommissions.reduce((acc, commission) => {
+    const amount = Number(commission.amount || 0);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return acc;
+    }
+    const status = String(commission.status || "pending").toLowerCase();
+    if (status === "reversed" || status === "cancelled") {
+      return acc;
+    }
+    acc.total += amount;
+    if (status === "paid") {
+      acc.paid += amount;
+    } else if (status === "pending") {
+      acc.pending += amount;
+    } else {
+      acc.other += amount;
+    }
+    return acc;
+  }, { total: 0, paid: 0, pending: 0, other: 0 });
+  const estimatedRevenue = commissionTotals.total;
 
   const cohorts = phaseAnalytics.map((phase) => ({
     phaseId: phase.phaseId,
@@ -861,6 +879,13 @@ export function buildOperationalAnalytics(snapshot, options = {}) {
     pendingQueue,
     learning,
     bookings,
+    commissions: {
+      totalCount: affiliateCommissions.length,
+      totalValue: commissionTotals.total,
+      pendingValue: commissionTotals.pending,
+      paidValue: commissionTotals.paid,
+      otherValue: commissionTotals.other
+    },
     referrals: {
       totalInvites,
       totalConversions,
