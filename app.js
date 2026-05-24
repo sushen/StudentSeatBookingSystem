@@ -216,6 +216,7 @@ const elements = {
   loginBtn: document.getElementById("loginBtn"),
   logoutBtn: document.getElementById("logoutBtn"),
   profilePanel: document.getElementById("profilePanel"),
+  affiliatePanel: document.getElementById("affiliatePanel"),
   profileCard: document.getElementById("profileCard"),
   profileName: document.getElementById("profileName"),
   profileEmail: document.getElementById("profileEmail"),
@@ -229,6 +230,20 @@ const elements = {
   profileReferralEmpty: document.getElementById("profileReferralEmpty"),
   profileReferralList: document.getElementById("profileReferralList"),
   profileInviteBtn: document.getElementById("profileInviteBtn"),
+  affiliateReferralCode: document.getElementById("affiliateReferralCode"),
+  affiliateReferralLink: document.getElementById("affiliateReferralLink"),
+  affiliateCopyLinkBtn: document.getElementById("affiliateCopyLinkBtn"),
+  affiliateSyncBtn: document.getElementById("affiliateSyncBtn"),
+  affiliateTotalInvites: document.getElementById("affiliateTotalInvites"),
+  affiliatePendingReferrals: document.getElementById("affiliatePendingReferrals"),
+  affiliateApprovedReferrals: document.getElementById("affiliateApprovedReferrals"),
+  affiliateRejectedReferrals: document.getElementById("affiliateRejectedReferrals"),
+  affiliateConversions: document.getElementById("affiliateConversions"),
+  affiliatePendingCommission: document.getElementById("affiliatePendingCommission"),
+  affiliateApprovedCommission: document.getElementById("affiliateApprovedCommission"),
+  affiliatePaidCommission: document.getElementById("affiliatePaidCommission"),
+  affiliateReferralRows: document.getElementById("affiliateReferralRows"),
+  affiliateEmptyState: document.getElementById("affiliateEmptyState"),
   profileSignOutBtn: document.getElementById("profileSignOutBtn"),
   editProfileBtn: document.getElementById("editProfileBtn"),
   deleteAccountBtn: document.getElementById("deleteAccountBtn"),
@@ -777,21 +792,42 @@ function timestampToMillis(value) {
 }
 
 function normalizeReferralEventDoc(docId, data = {}) {
-  const status = normalizeString(data.status).toLowerCase();
+  const statusRaw = normalizeString(data.status).toLowerCase();
+  const normalizedStatus = statusRaw || "joined";
   const convertedAtMs = timestampToMillis(data.convertedAt);
-  const joinedAtMs = timestampToMillis(data.joinedAt);
-  const isConverted = Boolean(data.isConverted) || status === "converted" || Boolean(convertedAtMs);
+  const joinedAtMs = (
+    timestampToMillis(data.joinedAt) ??
+    timestampToMillis(data.createdAt) ??
+    timestampToMillis(data.updatedAt)
+  );
+  const createdAtMs = timestampToMillis(data.createdAt);
+  const updatedAtMs = timestampToMillis(data.updatedAt);
+  const explicitConverted = data.isConverted === true || normalizedStatus === "converted";
+  const progressPercentRaw = Number(data.progressPercent);
+  const completedPhaseCountRaw = Number(data.completedPhaseCount);
+  const totalPhaseCountRaw = Number(data.totalPhaseCount);
 
   return {
     eventId: normalizeString(data.eventId) || docId,
     referrerId: normalizeString(data.referrerId),
     userId: normalizeString(data.userId) || normalizeString(data.referredUserId),
-    referredUserName: normalizeString(data.referredUserName),
-    referredUserEmail: normalizeEmail(data.referredUserEmail),
-    status: status || (isConverted ? "converted" : "joined"),
-    isConverted,
+    referredUserName: normalizeString(data.referredUserName || data.name || data.displayName),
+    referredUserEmail: normalizeEmail(data.referredUserEmail || data.email),
+    status: explicitConverted ? "converted" : normalizedStatus,
+    isConverted: explicitConverted,
     joinedAtMs,
-    convertedAtMs
+    convertedAtMs,
+    createdAtMs,
+    updatedAtMs,
+    progressPercent: Number.isFinite(progressPercentRaw) ? progressPercentRaw : null,
+    phaseProgress: normalizeString(data.phaseProgress),
+    completedPhaseCount: Number.isFinite(completedPhaseCountRaw) ? Math.max(0, Math.floor(completedPhaseCountRaw)) : null,
+    totalPhaseCount: Number.isFinite(totalPhaseCountRaw) ? Math.max(0, Math.floor(totalPhaseCountRaw)) : null,
+    completedPhases: Array.isArray(data.completedPhases) ? data.completedPhases.slice() : [],
+    commissionStatus: normalizeString(data.commissionStatus),
+    commissionAmount: data.commissionAmount,
+    currency: normalizeString(data.currency),
+    commission: (typeof data.commission === "object" && data.commission) ? { ...data.commission } : null
   };
 }
 
@@ -1046,21 +1082,82 @@ function toggleProfileReferredByEditButton(profile = null) {
 }
 
 function normalizeAffiliateStats(data = {}) {
-  const invitesRaw = Number(data.totalInvites ?? data.invites ?? 0);
-  const conversionsRaw = Number(data.conversions ?? data.totalConversions ?? data.converted ?? 0);
+  const toNonNegativeInt = (value) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      return 0;
+    }
+    return Math.max(0, Math.floor(parsed));
+  };
+
+  const toNonNegativeNumber = (value) => {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      return 0;
+    }
+    return Math.max(0, parsed);
+  };
+
+  const pickInt = (keys = []) => {
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(data, key)) {
+        const parsed = Number(data[key]);
+        if (Number.isFinite(parsed)) {
+          return toNonNegativeInt(parsed);
+        }
+      }
+    }
+    return 0;
+  };
+
+  const pickNumber = (keys = []) => {
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(data, key)) {
+        const parsed = Number(data[key]);
+        if (Number.isFinite(parsed)) {
+          return toNonNegativeNumber(parsed);
+        }
+      }
+    }
+    return 0;
+  };
+
+  const hasNumericField = (keys = []) => keys.some((key) => {
+    if (!Object.prototype.hasOwnProperty.call(data, key)) {
+      return false;
+    }
+    return Number.isFinite(Number(data[key]));
+  });
+
+  const totalInvites = pickInt(["totalInvites", "invites", "totalJoins", "joins"]);
+  const conversions = pickInt(["conversions", "totalConversions", "converted", "conversionCount"]);
+  const hasCountStats = (
+    hasNumericField(["totalInvites", "invites", "totalJoins", "joins"]) ||
+    hasNumericField(["pendingReferrals", "pendingReferralCount", "pending"]) ||
+    hasNumericField(["approvedReferrals", "approvedReferralCount", "approved"]) ||
+    hasNumericField(["rejectedReferrals", "rejectedReferralCount", "rejected"]) ||
+    hasNumericField(["conversions", "totalConversions", "converted", "conversionCount"])
+  );
 
   return {
-    totalInvites: Math.max(0, Number.isFinite(invitesRaw) ? Math.floor(invitesRaw) : 0),
-    conversions: Math.max(0, Number.isFinite(conversionsRaw) ? Math.floor(conversionsRaw) : 0)
+    totalInvites,
+    invites: totalInvites,
+    totalJoins: pickInt(["totalJoins", "joins"]),
+    pendingReferrals: pickInt(["pendingReferrals", "pendingReferralCount", "pending"]),
+    approvedReferrals: pickInt(["approvedReferrals", "approvedReferralCount", "approved"]),
+    rejectedReferrals: pickInt(["rejectedReferrals", "rejectedReferralCount", "rejected"]),
+    conversions,
+    totalConversions: conversions,
+    pendingCommission: pickNumber(["pendingCommission", "commissionPending"]),
+    approvedCommission: pickNumber(["approvedCommission", "commissionApproved"]),
+    paidCommission: pickNumber(["paidCommission", "commissionPaid"]),
+    currency: normalizeString(data.currency),
+    hasCountStats
   };
 }
 
 function applyAffiliateStatsSyncResult(syncResult = {}) {
-  const normalized = normalizeAffiliateStats({
-    totalInvites: syncResult.totalInvites,
-    invites: syncResult.invites,
-    conversions: syncResult.conversions
-  });
+  const normalized = normalizeAffiliateStats(syncResult || {});
 
   state.affiliateStats = normalized;
   if (state.profile) {
@@ -1071,6 +1168,7 @@ function applyAffiliateStatsSyncResult(syncResult = {}) {
       conversions: normalized.conversions
     };
   }
+  renderAffiliateDashboard();
 }
 
 function normalizePhaseDoc(docId, data = {}) {
@@ -2425,6 +2523,9 @@ function getNavTargetElement(sectionKey) {
   if (sectionKey === "home") {
     return elements.homePanel;
   }
+  if (sectionKey === "affiliate") {
+    return elements.affiliatePanel;
+  }
   if (sectionKey === "profile") {
     return elements.profilePanel;
   }
@@ -2458,6 +2559,9 @@ function getSectionDisplayName(sectionKey) {
   }
   if (sectionKey === "profile") {
     return "Profile";
+  }
+  if (sectionKey === "affiliate") {
+    return "Affiliate";
   }
   if (sectionKey === "classroom") {
     return "Classroom";
@@ -2507,6 +2611,7 @@ function isNavSectionAvailable(sectionKey) {
         sectionKey === "overview" ||
         sectionKey === "learning" ||
         sectionKey === "features" ||
+        sectionKey === "affiliate" ||
         sectionKey === "profile" ||
         sectionKey === "classroom")
   );
@@ -2539,6 +2644,7 @@ function renderSectionVisibility() {
     ["overview", elements.overviewPanel],
     ["learning", elements.learningPanel],
     ["features", elements.featureGatePanel],
+    ["affiliate", elements.affiliatePanel],
     ["profile", elements.profilePanel],
     ["classroom", elements.classroomPanel],
     ["admin", elements.adminPanel]
@@ -2592,6 +2698,7 @@ function navigateToSection(sectionKey, { smooth = true } = {}) {
 
   state.selectedNavSection = sectionKey;
   renderWorkspaceNavigation();
+  renderAffiliateDashboard();
 }
 
 function navigateToClassroom(phaseId, fromSection = state.selectedNavSection) {
@@ -2799,6 +2906,455 @@ function getFallbackReferralEvents() {
   return Array.from(mergedByUserId.values());
 }
 
+function formatAffiliateMoney(value, currency = "") {
+  const amount = Number(value || 0);
+  const safeAmount = Number.isFinite(amount) ? amount : 0;
+  const normalizedCurrency = normalizeString(currency);
+  if (normalizedCurrency) {
+    return `${normalizedCurrency} ${safeAmount.toLocaleString()}`;
+  }
+  return safeAmount.toLocaleString();
+}
+
+function maskAffiliateEmail(email) {
+  const normalized = normalizeString(email);
+  if (!normalized) {
+    return "-";
+  }
+
+  const atIndex = normalized.indexOf("@");
+  if (atIndex <= 0 || atIndex === normalized.length - 1) {
+    return `${normalized.charAt(0) || "*"}***`;
+  }
+
+  const localPart = normalized.slice(0, atIndex);
+  const domainPart = normalized.slice(atIndex + 1);
+  if (!domainPart) {
+    return `${localPart.charAt(0) || "*"}***`;
+  }
+
+  return `${localPart.charAt(0) || "*"}***@${domainPart}`;
+}
+
+function normalizeAffiliateStatus(value) {
+  const normalized = normalizeString(value).toLowerCase();
+  if (normalized === "pending") {
+    return "pending";
+  }
+  if (normalized === "approved") {
+    return "approved";
+  }
+  if (normalized === "rejected") {
+    return "rejected";
+  }
+  if (normalized === "joined") {
+    return "joined";
+  }
+  if (normalized === "converted") {
+    return "converted";
+  }
+  return "unknown";
+}
+
+function getAffiliateStatsNumber(stats, keys, fallback = 0) {
+  const statsObject = (typeof stats === "object" && stats) ? stats : {};
+  const keyList = Array.isArray(keys) ? keys : [];
+  for (const key of keyList) {
+    if (!Object.prototype.hasOwnProperty.call(statsObject, key)) {
+      continue;
+    }
+    const parsed = Number(statsObject[key]);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  const fallbackNumber = Number(fallback);
+  return Number.isFinite(fallbackNumber) ? fallbackNumber : 0;
+}
+
+function buildAffiliateReferralLink() {
+  const referralCode = normalizeReferralCode(
+    state.profile?.referralCode || state.profile?.referral || buildReferralCodeFromUid(state.user?.uid || "")
+  );
+  if (!referralCode) {
+    return "";
+  }
+
+  const isJetBrainsLocalServer = isLocalLikeHostname(window.location.hostname) && String(window.location.port) === "63342";
+  const localShareOrigin = isJetBrainsLocalServer ? "http://localhost:5500" : window.location.origin;
+  const localSharePath = isJetBrainsLocalServer
+    ? "/index.html"
+    : (window.location.pathname || "/index.html");
+  const localShareHref = isJetBrainsLocalServer
+    ? `${localShareOrigin}${localSharePath}`
+    : window.location.href;
+
+  return buildReferralShareUrl(referralCode, {
+    frontPagePath: localSharePath,
+    currentHref: localShareHref,
+    currentOrigin: localShareOrigin
+  });
+}
+
+function collectAffiliateReferralEvents() {
+  const primaryEventSource = getPrimaryReferralEvents(state.referralEventsAsReferrer);
+  const primaryEvents = Array.isArray(primaryEventSource) ? primaryEventSource : [];
+  const fallbackEventSource = getFallbackReferralEvents();
+  const fallbackEvents = Array.isArray(fallbackEventSource) ? fallbackEventSource : [];
+  const publicEvents = Array.isArray(state.publicReferralEventsAsReferrer)
+    ? state.publicReferralEventsAsReferrer
+    : [];
+  const legacyEvents = Array.isArray(state.legacyReferralEventsAsReferrer)
+    ? state.legacyReferralEventsAsReferrer
+    : [];
+
+  const sourcePriorityByKey = new Map([
+    ["primary", 4],
+    ["fallback", 3],
+    ["public", 2],
+    ["legacy", 1]
+  ]);
+
+  const resolveMs = (value) => {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+    return timestampToMillis(value);
+  };
+
+  const normalizeEventForAffiliate = (eventDoc = {}, sourceKey = "fallback") => {
+    const rawStatus = normalizeString(eventDoc.status).toLowerCase();
+    const isConverted = eventDoc.isConverted === true || rawStatus === "converted";
+    const referralStatus = isConverted
+      ? "converted"
+      : normalizeAffiliateStatus(rawStatus || "joined");
+    const joinedAtMs = (
+      resolveMs(eventDoc.joinedAtMs) ??
+      resolveMs(eventDoc.joinedAt) ??
+      resolveMs(eventDoc.createdAtMs) ??
+      resolveMs(eventDoc.createdAt) ??
+      resolveMs(eventDoc.updatedAtMs) ??
+      resolveMs(eventDoc.updatedAt)
+    );
+    const convertedAtMs = (
+      resolveMs(eventDoc.convertedAtMs) ??
+      resolveMs(eventDoc.convertedAt)
+    );
+    const createdAtMs = (
+      resolveMs(eventDoc.createdAtMs) ??
+      resolveMs(eventDoc.createdAt)
+    );
+    const updatedAtMs = (
+      resolveMs(eventDoc.updatedAtMs) ??
+      resolveMs(eventDoc.updatedAt)
+    );
+    const progressPercentRaw = Number(eventDoc.progressPercent);
+    const completedPhaseCountRaw = Number(eventDoc.completedPhaseCount);
+    const totalPhaseCountRaw = Number(eventDoc.totalPhaseCount);
+
+    return {
+      eventId: normalizeString(eventDoc.eventId),
+      userId: normalizeString(eventDoc.userId) || normalizeString(eventDoc.referredUserId),
+      referredUserName: normalizeString(eventDoc.referredUserName || eventDoc.name || eventDoc.displayName),
+      referredUserEmail: normalizeEmail(eventDoc.referredUserEmail || eventDoc.email),
+      status: referralStatus,
+      isConverted,
+      joinedAtMs,
+      convertedAtMs,
+      createdAtMs,
+      updatedAtMs,
+      progressPercent: Number.isFinite(progressPercentRaw) ? progressPercentRaw : null,
+      phaseProgress: normalizeString(eventDoc.phaseProgress),
+      completedPhaseCount: Number.isFinite(completedPhaseCountRaw) ? Math.max(0, Math.floor(completedPhaseCountRaw)) : null,
+      totalPhaseCount: Number.isFinite(totalPhaseCountRaw) ? Math.max(0, Math.floor(totalPhaseCountRaw)) : null,
+      completedPhases: Array.isArray(eventDoc.completedPhases) ? eventDoc.completedPhases.slice() : [],
+      commissionStatus: normalizeString(eventDoc.commissionStatus),
+      commission: (typeof eventDoc.commission === "object" && eventDoc.commission) ? { ...eventDoc.commission } : null,
+      sourcePriority: sourcePriorityByKey.get(sourceKey) || 0
+    };
+  };
+
+  const getEventPriorityScore = (eventDoc) => {
+    const baseMs = eventDoc.convertedAtMs || eventDoc.joinedAtMs || eventDoc.updatedAtMs || eventDoc.createdAtMs || 0;
+    const infoScore = Number(Boolean(eventDoc.referredUserName)) +
+      Number(Boolean(eventDoc.referredUserEmail)) +
+      Number(Boolean(eventDoc.progressPercent !== null)) +
+      Number(Boolean(eventDoc.phaseProgress)) +
+      Number(Boolean(eventDoc.commissionStatus)) +
+      Number(Boolean(eventDoc.commission && eventDoc.commission.status));
+    return { baseMs, infoScore };
+  };
+
+  const choosePreferredEvent = (existingEvent, nextEvent) => {
+    if (!existingEvent) {
+      return nextEvent;
+    }
+    if ((nextEvent.sourcePriority || 0) > (existingEvent.sourcePriority || 0)) {
+      return nextEvent;
+    }
+    if ((nextEvent.sourcePriority || 0) < (existingEvent.sourcePriority || 0)) {
+      return existingEvent;
+    }
+
+    const existingScore = getEventPriorityScore(existingEvent);
+    const nextScore = getEventPriorityScore(nextEvent);
+    if (nextScore.baseMs > existingScore.baseMs) {
+      return nextEvent;
+    }
+    if (nextScore.baseMs < existingScore.baseMs) {
+      return existingEvent;
+    }
+    if (nextScore.infoScore > existingScore.infoScore) {
+      return nextEvent;
+    }
+    return existingEvent;
+  };
+
+  const mergedByIdentity = new Map();
+  const ingestEvents = (events, sourceKey) => {
+    const safeEvents = Array.isArray(events) ? events : [];
+    safeEvents.forEach((eventDoc) => {
+      if (!eventDoc || typeof eventDoc !== "object") {
+        return;
+      }
+
+      const normalized = normalizeEventForAffiliate(eventDoc, sourceKey);
+      const userIdentity = normalizeString(normalized.userId) || normalizeEmail(normalized.referredUserEmail);
+      const eventIdentity = normalizeString(normalized.eventId);
+      const identityKey = userIdentity || eventIdentity;
+      if (!identityKey) {
+        return;
+      }
+
+      const previous = mergedByIdentity.get(identityKey);
+      mergedByIdentity.set(identityKey, choosePreferredEvent(previous, normalized));
+    });
+  };
+
+  ingestEvents(legacyEvents, "legacy");
+  ingestEvents(publicEvents, "public");
+  ingestEvents(fallbackEvents, "fallback");
+  ingestEvents(primaryEvents, "primary");
+
+  return Array.from(mergedByIdentity.values())
+    .map((eventDoc) => {
+      const nextDoc = { ...eventDoc };
+      delete nextDoc.sourcePriority;
+      return nextDoc;
+    })
+    .sort((left, right) => {
+      const leftMs = left.convertedAtMs || left.joinedAtMs || left.updatedAtMs || left.createdAtMs || 0;
+      const rightMs = right.convertedAtMs || right.joinedAtMs || right.updatedAtMs || right.createdAtMs || 0;
+      return rightMs - leftMs;
+    });
+}
+
+function getReferralDisplayProgress(eventDoc = {}) {
+  const progressPercent = Number(eventDoc.progressPercent);
+  if (Number.isFinite(progressPercent)) {
+    return `${progressPercent}%`;
+  }
+
+  const phaseProgress = normalizeString(eventDoc.phaseProgress);
+  if (phaseProgress) {
+    return phaseProgress;
+  }
+
+  const completedPhaseCount = Number(eventDoc.completedPhaseCount);
+  const totalPhaseCount = Number(eventDoc.totalPhaseCount);
+  if (Number.isFinite(completedPhaseCount) && Number.isFinite(totalPhaseCount) && totalPhaseCount > 0) {
+    return `${completedPhaseCount} / ${totalPhaseCount} phases`;
+  }
+
+  if (Array.isArray(eventDoc.completedPhases) && eventDoc.completedPhases.length > 0) {
+    return `${eventDoc.completedPhases.length} phases completed`;
+  }
+
+  return "Progress not available";
+}
+
+function getCommissionDisplayStatus(eventDoc = {}) {
+  const directStatus = normalizeString(eventDoc.commissionStatus);
+  if (directStatus) {
+    return directStatus;
+  }
+
+  const nestedStatus = normalizeString(eventDoc.commission?.status);
+  if (nestedStatus) {
+    return nestedStatus;
+  }
+
+  return "Commission not available";
+}
+
+function renderAffiliateDashboard() {
+  if (!elements.affiliatePanel) {
+    return;
+  }
+
+  const setCounterValue = (targetElement, value) => {
+    if (!targetElement) {
+      return;
+    }
+    targetElement.textContent = String(value);
+  };
+
+  const clearRows = () => {
+    if (elements.affiliateReferralRows) {
+      elements.affiliateReferralRows.innerHTML = "";
+    }
+    if (elements.affiliateEmptyState) {
+      elements.affiliateEmptyState.classList.remove("hidden");
+    }
+  };
+
+  if (!state.user || !state.profile) {
+    if (elements.affiliateReferralCode) {
+      elements.affiliateReferralCode.textContent = "------";
+    }
+    if (elements.affiliateReferralLink) {
+      elements.affiliateReferralLink.value = "";
+    }
+    setCounterValue(elements.affiliateTotalInvites, "0");
+    setCounterValue(elements.affiliatePendingReferrals, "0");
+    setCounterValue(elements.affiliateApprovedReferrals, "0");
+    setCounterValue(elements.affiliateRejectedReferrals, "0");
+    setCounterValue(elements.affiliateConversions, "0");
+    setCounterValue(elements.affiliatePendingCommission, "0");
+    setCounterValue(elements.affiliateApprovedCommission, "0");
+    setCounterValue(elements.affiliatePaidCommission, "0");
+    clearRows();
+    refreshLucideIcons();
+    return;
+  }
+
+  const referralCode = normalizeReferralCode(
+    state.profile.referralCode || state.profile.referral || buildReferralCodeFromUid(state.user.uid)
+  );
+  if (elements.affiliateReferralCode) {
+    elements.affiliateReferralCode.textContent = referralCode || "------";
+  }
+
+  const referralLink = buildAffiliateReferralLink();
+  if (elements.affiliateReferralLink) {
+    elements.affiliateReferralLink.value = referralLink;
+  }
+
+  const affiliateStats = (typeof state.affiliateStats === "object" && state.affiliateStats) ? state.affiliateStats : {};
+  const events = collectAffiliateReferralEvents();
+
+  const inviteKeys = ["totalInvites", "invites", "totalJoins", "joins"];
+  const pendingKeys = ["pendingReferrals", "pendingReferralCount", "pending"];
+  const approvedKeys = ["approvedReferrals", "approvedReferralCount", "approved"];
+  const rejectedKeys = ["rejectedReferrals", "rejectedReferralCount", "rejected"];
+  const conversionKeys = ["conversions", "totalConversions", "converted", "conversionCount"];
+
+  const hasAffiliateCountStats = affiliateStats.hasCountStats === true;
+
+  let totalInvites = Math.max(0, Math.floor(getAffiliateStatsNumber(affiliateStats, inviteKeys, 0)));
+  let pendingReferrals = Math.max(0, Math.floor(getAffiliateStatsNumber(affiliateStats, pendingKeys, 0)));
+  let approvedReferrals = Math.max(0, Math.floor(getAffiliateStatsNumber(affiliateStats, approvedKeys, 0)));
+  let rejectedReferrals = Math.max(0, Math.floor(getAffiliateStatsNumber(affiliateStats, rejectedKeys, 0)));
+  let conversions = Math.max(0, Math.floor(getAffiliateStatsNumber(affiliateStats, conversionKeys, 0)));
+
+  if (!hasAffiliateCountStats) {
+    totalInvites = events.length;
+    conversions = events.reduce((count, eventDoc) => (
+      eventDoc.isConverted === true || normalizeString(eventDoc.status).toLowerCase() === "converted"
+        ? count + 1
+        : count
+    ), 0);
+    pendingReferrals = events.reduce((count, eventDoc) => (
+      normalizeAffiliateStatus(eventDoc.status) === "pending" ? count + 1 : count
+    ), 0);
+    approvedReferrals = events.reduce((count, eventDoc) => (
+      normalizeAffiliateStatus(eventDoc.status) === "approved" ? count + 1 : count
+    ), 0);
+    rejectedReferrals = events.reduce((count, eventDoc) => (
+      normalizeAffiliateStatus(eventDoc.status) === "rejected" ? count + 1 : count
+    ), 0);
+  }
+
+  const currency = normalizeString(affiliateStats.currency);
+  const pendingCommission = getAffiliateStatsNumber(affiliateStats, ["pendingCommission", "commissionPending"], 0);
+  const approvedCommission = getAffiliateStatsNumber(affiliateStats, ["approvedCommission", "commissionApproved"], 0);
+  const paidCommission = getAffiliateStatsNumber(affiliateStats, ["paidCommission", "commissionPaid"], 0);
+
+  setCounterValue(elements.affiliateTotalInvites, totalInvites);
+  setCounterValue(elements.affiliatePendingReferrals, pendingReferrals);
+  setCounterValue(elements.affiliateApprovedReferrals, approvedReferrals);
+  setCounterValue(elements.affiliateRejectedReferrals, rejectedReferrals);
+  setCounterValue(elements.affiliateConversions, conversions);
+  setCounterValue(elements.affiliatePendingCommission, formatAffiliateMoney(pendingCommission, currency));
+  setCounterValue(elements.affiliateApprovedCommission, formatAffiliateMoney(approvedCommission, currency));
+  setCounterValue(elements.affiliatePaidCommission, formatAffiliateMoney(paidCommission, currency));
+
+  if (!events.length) {
+    clearRows();
+    refreshLucideIcons();
+    return;
+  }
+
+  if (!elements.affiliateReferralRows) {
+    refreshLucideIcons();
+    return;
+  }
+
+  const rowHtml = events.map((eventDoc) => {
+    const learnerLabel = (
+      normalizeString(eventDoc.referredUserName) ||
+      normalizeString(eventDoc.name) ||
+      normalizeString(eventDoc.displayName) ||
+      normalizeString(eventDoc.userId) ||
+      "Unknown Learner"
+    );
+    const maskedEmail = maskAffiliateEmail(eventDoc.referredUserEmail || eventDoc.email);
+    const joinedAtLabel = (
+      formatCompactDateTime(
+        eventDoc.joinedAtMs ||
+        eventDoc.createdAtMs ||
+        eventDoc.updatedAtMs ||
+        null
+      ) || "-"
+    );
+    const normalizedStatus = normalizeAffiliateStatus(eventDoc.status);
+    const conversionLabel = (
+      eventDoc.isConverted === true || normalizeString(eventDoc.status).toLowerCase() === "converted"
+    )
+      ? "Converted"
+      : "Not converted";
+    const progressLabel = getReferralDisplayProgress(eventDoc);
+    const commissionLabel = getCommissionDisplayStatus(eventDoc);
+
+    const safeLearner = escapeHtml(learnerLabel);
+    const safeEmail = escapeHtml(maskedEmail);
+    const safeJoined = escapeHtml(joinedAtLabel);
+    const safeStatus = escapeHtml(normalizedStatus);
+    const safeProgress = escapeHtml(progressLabel);
+    const safeConversion = escapeHtml(conversionLabel);
+    const safeCommission = escapeHtml(commissionLabel);
+
+    return `
+      <tr>
+        <td>${safeLearner}</td>
+        <td>${safeEmail}</td>
+        <td>${safeJoined}</td>
+        <td><span class="affiliate-status-pill ${safeStatus}">${safeStatus}</span></td>
+        <td>${safeProgress}</td>
+        <td>${safeConversion}</td>
+        <td>${safeCommission}</td>
+      </tr>
+    `;
+  }).join("");
+
+  elements.affiliateReferralRows.innerHTML = rowHtml;
+  if (elements.affiliateEmptyState) {
+    elements.affiliateEmptyState.classList.add("hidden");
+  }
+  refreshLucideIcons();
+}
+
 function renderProfileReferralActivity() {
   if (!elements.profileReferralEmpty || !elements.profileReferralList) {
     return;
@@ -2873,6 +3429,7 @@ function updateProfileUI() {
     }
     toggleProfileReferredByEditButton(null);
     renderProfileReferralActivity();
+    renderAffiliateDashboard();
     renderWorkspaceNavigation();
     return;
   }
@@ -2905,6 +3462,7 @@ function updateProfileUI() {
     elements.profileConversionCount.textContent = String(conversionCount);
   }
   renderProfileReferralActivity();
+  renderAffiliateDashboard();
 
   if (elements.adminChip) {
     elements.adminChip.classList.toggle("hidden", !state.isAdmin);
@@ -3922,6 +4480,7 @@ function subscribeToAffiliateStats(userId) {
         ? normalizeAffiliateStats(snapshot.data())
         : normalizeAffiliateStats({});
       updateProfileUI();
+      renderAffiliateDashboard();
     },
     (error) => {
       if (isPermissionDeniedError(error)) {
@@ -3956,6 +4515,7 @@ async function maybeSyncAffiliateStats() {
     if (syncResult && typeof syncResult === "object" && syncResult.ok) {
       applyAffiliateStatsSyncResult(syncResult);
       updateProfileUI();
+      renderAffiliateDashboard();
     }
   } catch (error) {
     const errorCode = String(error?.code || "").toLowerCase();
@@ -3969,6 +4529,51 @@ async function maybeSyncAffiliateStats() {
     }
   } finally {
     state.affiliateStatsSyncInFlight = false;
+  }
+}
+
+async function handleAffiliateManualSync() {
+  if (!state.user || !state.profile) {
+    showMessage("Please login first.", "error");
+    return;
+  }
+  if (!state.callablesReady) {
+    showMessage("Affiliate sync is not available right now.", "error");
+    return;
+  }
+  if (state.affiliateStatsSyncInFlight) {
+    showMessage("Affiliate sync already running.", "info");
+    return;
+  }
+
+  state.affiliateStatsSyncInFlight = true;
+  state.lastAffiliateStatsSyncAtMs = Date.now();
+  if (elements.affiliateSyncBtn) {
+    elements.affiliateSyncBtn.disabled = true;
+    elements.affiliateSyncBtn.textContent = "Syncing...";
+  }
+
+  try {
+    const syncResult = await syncAffiliateStatsForCurrentUser(callBackendFunction, {
+      uid: state.user.uid,
+      profile: state.profile
+    });
+
+    if (syncResult && typeof syncResult === "object" && syncResult.ok) {
+      applyAffiliateStatsSyncResult(syncResult);
+    }
+
+    updateProfileUI();
+    renderAffiliateDashboard();
+    showMessage("Affiliate stats synced.", "success");
+  } catch (error) {
+    showMessage(`Affiliate sync failed: ${error?.message || "Unknown error"}`, "error");
+  } finally {
+    state.affiliateStatsSyncInFlight = false;
+    if (elements.affiliateSyncBtn) {
+      elements.affiliateSyncBtn.disabled = false;
+      elements.affiliateSyncBtn.textContent = "Sync Stats";
+    }
   }
 }
 
@@ -4029,6 +4634,7 @@ function subscribeToPublicReferralEvents(referralCodeInput) {
   const referralCode = normalizeReferralCode(referralCodeInput);
   if (!referralCode) {
     updateProfileUI();
+    renderAffiliateDashboard();
     return;
   }
 
@@ -4038,29 +4644,47 @@ function subscribeToPublicReferralEvents(referralCodeInput) {
     (snapshot) => {
       const events = [];
       snapshot.forEach((eventDoc) => {
-        const normalized = normalizePublicReferralEventDoc(eventDoc.id, eventDoc.data() || {}, timestampToMillis);
+        const eventData = eventDoc.data() || {};
+        const normalized = normalizePublicReferralEventDoc(eventDoc.id, eventData, timestampToMillis);
         if (!normalized.userId || normalized.userId === normalizeString(state.user?.uid)) {
           return;
         }
+        const rawStatus = normalizeAffiliateStatus(eventData.status);
+        const explicitConverted = eventData.isConverted === true || normalizeString(eventData.status).toLowerCase() === "converted";
+        const resolvedStatus = explicitConverted
+          ? "converted"
+          : (rawStatus === "unknown" ? normalized.status : rawStatus);
+        const progressPercentRaw = Number(eventData.progressPercent);
+        const completedPhaseCountRaw = Number(eventData.completedPhaseCount);
+        const totalPhaseCountRaw = Number(eventData.totalPhaseCount);
         events.push({
           eventId: normalized.eventId,
           referrerId: normalizeString(state.user?.uid),
           userId: normalized.userId,
           referredUserName: normalized.referredUserName,
           referredUserEmail: normalized.referredUserEmail,
-          status: normalized.status,
-          isConverted: normalized.isConverted,
+          status: resolvedStatus,
+          isConverted: explicitConverted,
           joinedAtMs: normalized.joinedAtMs,
-          convertedAtMs: normalized.convertedAtMs
+          convertedAtMs: explicitConverted ? normalized.convertedAtMs : null,
+          progressPercent: Number.isFinite(progressPercentRaw) ? progressPercentRaw : null,
+          phaseProgress: normalizeString(eventData.phaseProgress),
+          completedPhaseCount: Number.isFinite(completedPhaseCountRaw) ? Math.max(0, Math.floor(completedPhaseCountRaw)) : null,
+          totalPhaseCount: Number.isFinite(totalPhaseCountRaw) ? Math.max(0, Math.floor(totalPhaseCountRaw)) : null,
+          completedPhases: Array.isArray(eventData.completedPhases) ? eventData.completedPhases.slice() : [],
+          commissionStatus: normalizeString(eventData.commissionStatus),
+          commission: (typeof eventData.commission === "object" && eventData.commission) ? { ...eventData.commission } : null
         });
       });
       state.publicReferralEventsAsReferrer = events;
       updateProfileUI();
+      renderAffiliateDashboard();
     },
     (error) => {
       void error;
       state.publicReferralEventsAsReferrer = [];
       updateProfileUI();
+      renderAffiliateDashboard();
     }
   );
 }
@@ -4089,6 +4713,7 @@ function subscribeToLegacyReferralUsers(referralCodeInput) {
 
   if (!referralCode) {
     updateProfileUI();
+    renderAffiliateDashboard();
     return;
   }
 
@@ -4106,6 +4731,7 @@ function subscribeToLegacyReferralUsers(referralCodeInput) {
       timestampToMillis
     });
     updateProfileUI();
+    renderAffiliateDashboard();
   };
 
   const snapshotToUserEntries = (snapshot) => {
@@ -4202,6 +4828,7 @@ function subscribeToReferralEventsAsReferrer(userId) {
       });
       state.referralEventsAsReferrer = nextEvents;
       updateProfileUI();
+      renderAffiliateDashboard();
     },
     (error) => {
       if (isPermissionDeniedError(error)) {
@@ -4628,6 +5255,41 @@ function bindEvents() {
         return;
       }
       showMessage(`Referral link ready: ${inviteUrl}`, "info");
+    });
+  }
+  if (elements.affiliateCopyLinkBtn) {
+    elements.affiliateCopyLinkBtn.addEventListener("click", () => {
+      registerSoundEngineUserInteraction();
+      const link = elements.affiliateReferralLink?.value || buildAffiliateReferralLink();
+      if (!link) {
+        showMessage("Referral link is not ready yet.", "info");
+        return;
+      }
+
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        navigator.clipboard.writeText(link)
+          .then(() => showMessage("Referral link copied to clipboard.", "success"))
+          .catch(() => {
+            if (fallbackCopyText(link)) {
+              showMessage("Referral link copied to clipboard.", "success");
+            } else {
+              showMessage(`Referral link ready: ${link}`, "info");
+            }
+          });
+        return;
+      }
+
+      if (fallbackCopyText(link)) {
+        showMessage("Referral link copied to clipboard.", "success");
+      } else {
+        showMessage(`Referral link ready: ${link}`, "info");
+      }
+    });
+  }
+  if (elements.affiliateSyncBtn) {
+    elements.affiliateSyncBtn.addEventListener("click", () => {
+      registerSoundEngineUserInteraction();
+      void handleAffiliateManualSync();
     });
   }
   if (elements.editProfileBtn) {
