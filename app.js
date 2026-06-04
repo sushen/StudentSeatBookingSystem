@@ -42,6 +42,7 @@ import {
   normalizePublicReferralEventDoc
 } from "./js/referralPublicEvents.js";
 import { syncAffiliateStatsForCurrentUser } from "./js/referralSync.js";
+import { bindHomeNavigationClick } from "./js/homeNavigation.js";
 
 // TODO: Replace with your Firebase web app config if needed.
 // Firebase Console -> Project Settings -> General -> Your apps -> SDK setup and configuration
@@ -70,6 +71,7 @@ const FUNCTIONS_EMULATOR_HOST = "127.0.0.1";
 const FUNCTIONS_EMULATOR_PORT = 5001;
 const SUPER_ADMIN_PROFILE_REFRESH_MS = 60 * 1000;
 const FUNCTIONS_EMULATOR_QUERY_KEY = "functionsEmulator";
+const BOOKING_EXPIRY_MS = 15 * 60 * 1000;
 
 const BOOKING_STATUS_PENDING = "pending";
 const BOOKING_STATUS_REVIEWING = "reviewing";
@@ -158,6 +160,9 @@ const LEGACY_PHASE_ID_MAP = new Map([
   ["phase_5", "phase5"],
   ["phase_6", "phase6"]
 ]);
+const CANONICAL_TO_LEGACY_PHASE_ID_MAP = new Map(
+  Array.from(LEGACY_PHASE_ID_MAP.entries()).map(([legacyPhaseId, canonicalPhaseId]) => [canonicalPhaseId, legacyPhaseId])
+);
 
 let auth = null;
 let db = null;
@@ -188,6 +193,7 @@ let superAdminProfileTicker = null;
 const elements = {
   authLanding: document.getElementById("authLanding"),
   appShell: document.getElementById("appShell"),
+  sidebarLogo: document.querySelector(".sidebar-logo"),
   workspaceNav: document.getElementById("workspaceNav"),
   workspaceNavButtons: Array.from(document.querySelectorAll("[data-nav-section]")),
   topbarSectionLabel: document.getElementById("topbarSectionLabel"),
@@ -585,6 +591,21 @@ async function callBackendFunction(name, data = {}) {
   return response?.data || null;
 }
 
+function isCallableAvailabilityError(error) {
+  const normalizedCode = String(error?.code || "").toLowerCase();
+  const normalizedMessage = String(error?.message || "").toLowerCase();
+
+  return (
+    normalizedCode === "functions-unavailable" ||
+    normalizedCode.includes("unavailable") ||
+    normalizedCode.includes("internal") ||
+    normalizedCode.includes("unknown") ||
+    normalizedCode.includes("deadline-exceeded") ||
+    normalizedCode.includes("not-found") ||
+    normalizedMessage.includes("function not found")
+  );
+}
+
 function loadAffiliateSessionIdFromStorage() {
   try {
     const stored = window.localStorage.getItem(AFFILIATE_SESSION_STORAGE_KEY);
@@ -931,6 +952,10 @@ function canonicalizePhaseId(rawPhaseId) {
   return normalized;
 }
 
+function getLegacyPhaseIdForCanonical(phaseId) {
+  return CANONICAL_TO_LEGACY_PHASE_ID_MAP.get(canonicalizePhaseId(phaseId)) || "";
+}
+
 function toTrackName(rawLevel) {
   const lowered = normalizeString(rawLevel).toLowerCase();
   if (lowered === PHASE_TRACK_BEGINNER || lowered === PHASE_TRACK_INTERMEDIATE || lowered === PHASE_TRACK_ADVANCED) {
@@ -1048,7 +1073,7 @@ function formatReferredByLabel(profile = {}) {
     if (profilePendingStatus === REFERRAL_APPROVAL_STATUS_PENDING && profilePendingCode) {
       return `Pending (${profilePendingCode})`;
     }
-    return "Not set";
+    return normalizeReferralCode(state.adminReferralCode || DEFAULT_ADMIN_REFERRAL_CODE_FALLBACK) || "Not set";
   }
 
   const referredByName = normalizeString(profile.referredByName);
@@ -4057,6 +4082,63 @@ async function maybeMarkReferralConversion() {
   }
 }
 
+function normalizeBookingContactNumber(value) {
+  return normalizeString(value).replace(/[\s\-()]/g, "");
+}
+
+function buildClientBookingPayload(phaseId, whatsappNumber) {
+  const canonicalPhaseId = canonicalizePhaseId(phaseId);
+  const legacyPhaseId = getLegacyPhaseIdForCanonical(canonicalPhaseId);
+  const phaseAlias = legacyPhaseId || canonicalPhaseId;
+  const userId = state.user?.uid || "";
+  const bookingId = `${userId}_${canonicalPhaseId}`;
+  const nowMs = Date.now();
+  const contactNumber = normalizeBookingContactNumber(whatsappNumber);
+  const userName = normalizeString(state.profile?.name) || normalizeString(state.user?.displayName) || "Unknown User";
+  const userEmail = normalizeString(state.profile?.email) || normalizeString(state.user?.email);
+
+  return {
+    bookingId,
+    id: bookingId,
+    userId,
+    uid: userId,
+    phaseId: canonicalPhaseId,
+    phase: phaseAlias,
+    phaseKey: phaseAlias,
+    phaseCanonicalId: canonicalPhaseId,
+    phaseLegacyId: legacyPhaseId || null,
+    phaseIdAliases: Array.from(new Set([canonicalPhaseId, legacyPhaseId].filter(Boolean))),
+    userName,
+    name: userName,
+    userEmail,
+    email: userEmail,
+    phone: contactNumber,
+    whatsapp: contactNumber,
+    phoneNumber: contactNumber,
+    whatsappNumber: contactNumber,
+    status: BOOKING_STATUS_PENDING,
+    requestStatus: BOOKING_STATUS_PENDING,
+    bookingStatus: BOOKING_STATUS_PENDING,
+    createdAtMs: nowMs,
+    createdAt: nowMs,
+    updatedAtMs: nowMs,
+    updatedAt: nowMs,
+    source: "web-fallback",
+    expiresAtMs: nowMs + BOOKING_EXPIRY_MS,
+    expiresAt: nowMs + BOOKING_EXPIRY_MS
+  };
+}
+
+async function createBookingWithFirestoreFallback(phaseId, whatsappNumber) {
+  if (!db || !docFn || !setDocFn || !state.user) {
+    throw makeAppError("firestore-unavailable", "Firestore booking fallback is not initialized.");
+  }
+
+  const payload = buildClientBookingPayload(phaseId, whatsappNumber);
+  await setDocFn(docFn(db, "bookings", payload.bookingId), payload);
+  return payload.bookingId;
+}
+
 async function requestBookingForPhase(phaseId, whatsappNumber) {
   if (!state.firebaseReady || !db) {
     showMessage("Firestore is not ready.", "error");
@@ -4088,8 +4170,14 @@ async function requestBookingForPhase(phaseId, whatsappNumber) {
   }
 
   if (!state.callablesReady) {
-    showMessage("Booking service is unavailable. Cloud Functions must be deployed.", "error");
-    return false;
+    try {
+      await createBookingWithFirestoreFallback(canonicalPhaseId, whatsappNumber);
+      showMessage("Booking request submitted and waiting for admin approval.", "success");
+      return true;
+    } catch (fallbackError) {
+      showMessage(`Booking fallback failed: ${fallbackError.message}`, "error");
+      return false;
+    }
   }
 
   try {
@@ -4116,15 +4204,15 @@ async function requestBookingForPhase(phaseId, whatsappNumber) {
       showMessage("Booking blocked by backend authorization.", "error");
       return false;
     }
-    if (
-      normalizedCode.includes("unavailable") ||
-      normalizedCode.includes("internal") ||
-      normalizedCode.includes("unknown") ||
-      normalizedCode.includes("deadline-exceeded") ||
-      normalizedCode.includes("not-found")
-    ) {
-      showMessage("Booking service is temporarily unavailable. Please retry shortly.", "error");
-      return false;
+    if (isCallableAvailabilityError(error)) {
+      try {
+        await createBookingWithFirestoreFallback(canonicalPhaseId, whatsappNumber);
+        showMessage("Booking request submitted and waiting for admin approval.", "success");
+        return true;
+      } catch (fallbackError) {
+        showMessage(`Booking service fallback failed: ${fallbackError.message}`, "error");
+        return false;
+      }
     }
     showMessage(`Booking failed: ${error.message}`, "error");
     return false;
@@ -5416,6 +5504,14 @@ function bindEvents() {
       window.location.href = "./admin/admin.html";
     });
   }
+  bindHomeNavigationClick({
+    triggerElement: elements.sidebarLogo,
+    beforeNavigate: registerSoundEngineUserInteraction,
+    isNavigationAllowed: () => Boolean(state.user),
+    navigateToHome: () => {
+      navigateToSection("home");
+    }
+  });
 }
 
 async function setupFirebase() {

@@ -21,6 +21,7 @@ const FALLBACK_SUPER_ADMIN_EMAILS = new Set([
 ]);
 const SUPER_ADMIN_CONFIG_PATH = "appConfig/system";
 const ADMIN_REFERRAL_ALIAS = "ADMIN";
+const SUPER_ADMIN_DEFAULT_REFERRAL_CODE = "JXC6G2";
 
 const BOOKING_EXPIRY_MS = 15 * 60 * 1000;
 const AFFILIATE_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -192,10 +193,13 @@ async function findSuperAdminReferrerDoc(superAdminEmails = null) {
 async function resolveAdminReferralCode() {
   const activeSuperAdminEmails = await getActiveSuperAdminEmails();
   const adminReferrerDoc = await findSuperAdminReferrerDoc(activeSuperAdminEmails);
+  const defaultReferralCode = normalizeReferralCode(SUPER_ADMIN_DEFAULT_REFERRAL_CODE);
   if (adminReferrerDoc) {
     const adminData = adminReferrerDoc.data() || {};
     const referralCode =
-      normalizeReferralCode(adminData.referralCode) || buildReferralCodeFromUid(adminReferrerDoc.id);
+      normalizeReferralCode(adminData.referralCode) ||
+      defaultReferralCode ||
+      buildReferralCodeFromUid(adminReferrerDoc.id);
     if (referralCode) {
       return {
         referralCode,
@@ -211,7 +215,7 @@ async function resolveAdminReferralCode() {
     }
     try {
       const adminAuthUser = await auth.getUserByEmail(normalizedAdminEmail);
-      const fallbackCode = buildReferralCodeFromUid(adminAuthUser.uid);
+      const fallbackCode = defaultReferralCode || buildReferralCodeFromUid(adminAuthUser.uid);
       if (fallbackCode) {
         return {
           referralCode: fallbackCode,
@@ -253,20 +257,28 @@ async function resolveReferrerByReferralCode(referralCodeInput) {
     return null;
   }
 
-  if (isAdminReferralAlias(requestedReferralCode)) {
+  const defaultSuperAdminReferralCode = normalizeReferralCode(SUPER_ADMIN_DEFAULT_REFERRAL_CODE);
+  if (
+    isAdminReferralAlias(requestedReferralCode) ||
+    (defaultSuperAdminReferralCode && requestedReferralCode === defaultSuperAdminReferralCode)
+  ) {
     const adminReferrerDoc = await findSuperAdminReferrerDoc();
-    if (!adminReferrerDoc) {
+    if (!adminReferrerDoc && isAdminReferralAlias(requestedReferralCode)) {
       return null;
     }
-    const adminData = adminReferrerDoc.data() || {};
-    const resolvedReferralCode =
-      normalizeReferralCode(adminData.referralCode) || buildReferralCodeFromUid(adminReferrerDoc.id);
+    if (adminReferrerDoc) {
+      const adminData = adminReferrerDoc.data() || {};
+      const resolvedReferralCode =
+        defaultSuperAdminReferralCode ||
+        normalizeReferralCode(adminData.referralCode) ||
+        buildReferralCodeFromUid(adminReferrerDoc.id);
 
-    return {
-      referrerDoc: adminReferrerDoc,
-      requestedReferralCode,
-      resolvedReferralCode
-    };
+      return {
+        referrerDoc: adminReferrerDoc,
+        requestedReferralCode,
+        resolvedReferralCode
+      };
+    }
   }
 
   const referrerSnapshot = await db.collection("users")
@@ -800,7 +812,187 @@ async function runBookingConsistencyAndUnlockSync() {
   };
 }
 
+async function backfillMissingUserReferralsToSuperAdminDefault() {
+  const defaultSuperAdminReferralCode = normalizeReferralCode(SUPER_ADMIN_DEFAULT_REFERRAL_CODE);
+  if (!defaultSuperAdminReferralCode) {
+    return {
+      reason: "default-referral-code-unavailable",
+      usersScanned: 0,
+      usersUpdated: 0,
+      referralEventsCreated: 0,
+      skippedSelf: 0,
+      skippedHasReferral: 0,
+      skippedPendingApproval: 0
+    };
+  }
+
+  const superAdminReferrerDoc = await findSuperAdminReferrerDoc();
+  if (!superAdminReferrerDoc) {
+    return {
+      reason: "super-admin-not-found",
+      usersScanned: 0,
+      usersUpdated: 0,
+      referralEventsCreated: 0,
+      skippedSelf: 0,
+      skippedHasReferral: 0,
+      skippedPendingApproval: 0
+    };
+  }
+
+  const superAdminData = superAdminReferrerDoc.data() || {};
+  const superAdminReferrerId = normalizeString(superAdminReferrerDoc.id);
+  if (!superAdminReferrerId) {
+    return {
+      reason: "super-admin-id-unavailable",
+      usersScanned: 0,
+      usersUpdated: 0,
+      referralEventsCreated: 0,
+      skippedSelf: 0,
+      skippedHasReferral: 0,
+      skippedPendingApproval: 0
+    };
+  }
+
+  const now = admin.firestore.Timestamp.now();
+  const nowMs = now.toMillis();
+  const superAdminName = normalizeString(superAdminData.name) || "Super Admin";
+  const superAdminEmail = normalizeEmail(superAdminData.email);
+
+  const [usersSnapshot, existingSuperAdminEventsSnapshot] = await Promise.all([
+    db.collection("users").get(),
+    db.collection("referralEvents")
+      .where("referrerId", "==", superAdminReferrerId)
+      .get()
+  ]);
+
+  const existingSuperAdminEventUserIds = new Set();
+  existingSuperAdminEventsSnapshot.forEach((eventDoc) => {
+    const eventData = eventDoc.data() || {};
+    const userIdFromData = normalizeString(eventData.userId || eventData.referredUserId);
+    if (userIdFromData) {
+      existingSuperAdminEventUserIds.add(userIdFromData);
+      return;
+    }
+    const eventId = normalizeString(eventDoc.id);
+    const expectedPrefix = `${superAdminReferrerId}_`;
+    if (!eventId.startsWith(expectedPrefix)) {
+      return;
+    }
+    const userIdFromEventId = normalizeString(eventId.slice(expectedPrefix.length));
+    if (userIdFromEventId) {
+      existingSuperAdminEventUserIds.add(userIdFromEventId);
+    }
+  });
+
+  const writer = db.bulkWriter();
+  let usersUpdated = 0;
+  let referralEventsCreated = 0;
+  let skippedSelf = 0;
+  let skippedHasReferral = 0;
+  let skippedPendingApproval = 0;
+  let normalizedSuperAdminReferralCode = false;
+
+  if (normalizeReferralCode(superAdminData.referralCode) !== defaultSuperAdminReferralCode) {
+    writer.set(superAdminReferrerDoc.ref, {
+      referralCode: defaultSuperAdminReferralCode,
+      updatedAt: now,
+      updatedAtMs: nowMs
+    }, { merge: true });
+    normalizedSuperAdminReferralCode = true;
+  }
+
+  usersSnapshot.forEach((userDoc) => {
+    const userId = normalizeString(userDoc.id);
+    if (!userId) {
+      return;
+    }
+    if (userId === superAdminReferrerId) {
+      skippedSelf += 1;
+      return;
+    }
+
+    const userData = userDoc.data() || {};
+    const existingReferredBy = normalizeString(userData.referredBy);
+    const existingReferredByCode = normalizeReferralCode(userData.referredByCode);
+    if (existingReferredBy || existingReferredByCode) {
+      skippedHasReferral += 1;
+      return;
+    }
+
+    const pendingStatus = normalizeReferralApprovalStatus(userData.pendingReferralStatus);
+    const pendingReferralCode = normalizeReferralCode(
+      userData.pendingReferralCode || userData.pendingReferralLastCode
+    );
+    const hasConflictingPendingReferral = (
+      pendingStatus === REFERRAL_APPROVAL_STATUS_PENDING &&
+      pendingReferralCode &&
+      pendingReferralCode !== defaultSuperAdminReferralCode
+    );
+    if (hasConflictingPendingReferral) {
+      skippedPendingApproval += 1;
+      return;
+    }
+
+    const selfReferralCode = normalizeReferralCode(userData.referralCode) || buildReferralCodeFromUid(userId);
+    writer.set(userDoc.ref, {
+      referralCode: selfReferralCode,
+      referredBy: superAdminReferrerId,
+      referredByName: superAdminName,
+      referredByEmail: superAdminEmail,
+      referredByCode: defaultSuperAdminReferralCode,
+      pendingReferralStatus: REFERRAL_APPROVAL_STATUS_APPROVED,
+      pendingReferralLastCode: defaultSuperAdminReferralCode,
+      pendingReferralLastReferrerId: superAdminReferrerId,
+      pendingReferralLastReferrerName: superAdminName,
+      pendingReferralLastReferrerEmail: superAdminEmail,
+      pendingReferralCode: FieldValue.delete(),
+      pendingReferralReferrerId: FieldValue.delete(),
+      pendingReferralReferrerName: FieldValue.delete(),
+      pendingReferralReferrerEmail: FieldValue.delete(),
+      pendingReferralRequestId: FieldValue.delete(),
+      pendingReferralRequestedAt: FieldValue.delete(),
+      pendingReferralRequestedAtMs: FieldValue.delete(),
+      updatedAt: now,
+      updatedAtMs: nowMs
+    }, { merge: true });
+    usersUpdated += 1;
+
+    if (!existingSuperAdminEventUserIds.has(userId)) {
+      writer.set(db.doc(`referralEvents/${superAdminReferrerId}_${userId}`), {
+        eventId: `${superAdminReferrerId}_${userId}`,
+        referrerId: superAdminReferrerId,
+        userId,
+        referredUserName: normalizeString(userData.name),
+        referredUserEmail: normalizeEmail(userData.email),
+        status: REFERRAL_EVENT_STATUS_JOINED,
+        isConverted: false,
+        joinedAt: now,
+        updatedAt: now,
+        source: "default-super-admin-backfill"
+      }, { merge: true });
+      existingSuperAdminEventUserIds.add(userId);
+      referralEventsCreated += 1;
+    }
+  });
+
+  await writer.close();
+
+  return {
+    reason: "ok",
+    superAdminReferrerId,
+    superAdminReferralCode: defaultSuperAdminReferralCode,
+    normalizedSuperAdminReferralCode,
+    usersScanned: usersSnapshot.size,
+    usersUpdated,
+    referralEventsCreated,
+    skippedSelf,
+    skippedHasReferral,
+    skippedPendingApproval
+  };
+}
+
 async function runReferralStatsReconciliation() {
+  const defaultReferralBackfill = await backfillMissingUserReferralsToSuperAdminDefault();
   const now = admin.firestore.Timestamp.now();
   const referralSnapshot = await db.collection("referralEvents").get();
   const aggregateByReferrer = new Map();
@@ -847,6 +1039,7 @@ async function runReferralStatsReconciliation() {
   await writer.close();
 
   return {
+    defaultReferralBackfill,
     referralEventsScanned: referralSnapshot.size,
     updatedStatsDocs
   };

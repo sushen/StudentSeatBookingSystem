@@ -59,16 +59,43 @@ async function main() {
       });
     });
 
-    // Booking lifecycle is backend-authoritative.
-    await assertFails(
+    // Students can create their own pending booking request.
+    await assertSucceeds(
       setDoc(doc(userDb, "bookings", `${userId}_phase2`), {
         bookingId: `${userId}_phase2`,
+        id: `${userId}_phase2`,
         userId,
+        uid: userId,
+        status: "pending",
+        requestStatus: "pending",
+        bookingStatus: "pending",
+        phaseId: "phase2"
+      })
+    );
+
+    await assertFails(
+      setDoc(doc(userDb, "bookings", `${userId}_phase3`), {
+        bookingId: `${userId}_phase3`,
+        userId,
+        status: "approved",
+        phaseId: "phase3"
+      })
+    );
+
+    await assertFails(
+      setDoc(doc(userDb, "bookings", "otherUser_phase2"), {
+        bookingId: "otherUser_phase2",
+        userId: "otherUser",
         status: "pending",
         phaseId: "phase2"
       })
     );
+
     await assertFails(
+      getDoc(doc(userDb, "bookings", "otherUser_phase1"))
+    );
+
+    await assertSucceeds(
       updateDoc(doc(adminDb, "bookings", `${userId}_phase1`), {
         status: "approved"
       })

@@ -371,6 +371,7 @@ img {
   background: #ffffff;
   object-fit: contain;
   padding: 4px;
+  cursor: pointer;
 }
 
 .sidebar-brand-name {
@@ -1488,6 +1489,8 @@ img {
   height: 44px;
   border-radius: var(--radius-sm);
   padding: 0 12px;
+  background: #ffffff;
+  color: #0f2540;
 }
 
 .affiliate-link-row button {

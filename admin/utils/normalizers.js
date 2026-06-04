@@ -133,6 +133,7 @@ export function normalizeUserDoc(userId, data = {}) {
     whatsappNumber: normalizedWhatsappNumber,
     referralCode: normalizeString(data.referralCode).toUpperCase(),
     referredBy: normalizeString(data.referredBy),
+    referredByCode: normalizeString(data.referredByCode).toUpperCase(),
     progress: Number.isFinite(progressRaw) ? clamp(progressRaw, 0, 100) : null,
     unlockedPhases: normalizeStringArray(data.unlockedPhases).map(canonicalizePhaseId).filter(Boolean),
     completedPhases: normalizeStringArray(data.completedPhases).map(canonicalizePhaseId).filter(Boolean),

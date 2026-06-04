@@ -11,6 +11,132 @@ import { clamp, formatPhaseLabel } from "../utils/formatters.js";
 import { getEffectiveBookingStatus } from "../utils/normalizers.js";
 import { getLessonCatalogPhaseIds, getLessonCountForPhase } from "../../learning/lessonCatalog.js";
 
+const SUPER_ADMIN_DEFAULT_REFERRAL_CODE = "JXC6G2";
+const SUPER_ADMIN_EMAIL_ALIASES = new Set([
+  "sushen.biswas.aga@gmail.com",
+  "sushen.biswas.aga@googlemail.com"
+]);
+
+function normalizeString(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeEmail(value) {
+  return normalizeString(value).toLowerCase();
+}
+
+function normalizeReferralCode(value) {
+  const normalized = normalizeString(value).replace(/[^a-z0-9]/gi, "").toUpperCase();
+  return normalized.slice(0, 6);
+}
+
+function buildReferrerIdByReferralCode(users) {
+  const referrerIdByReferralCode = new Map();
+  users.forEach((user) => {
+    const userId = normalizeString(user?.userId);
+    const referralCode = normalizeReferralCode(user?.referralCode);
+    if (!userId || !referralCode || referrerIdByReferralCode.has(referralCode)) {
+      return;
+    }
+    referrerIdByReferralCode.set(referralCode, userId);
+  });
+  return referrerIdByReferralCode;
+}
+
+function resolveDefaultSuperAdminUser(users) {
+  const defaultReferralCode = normalizeReferralCode(SUPER_ADMIN_DEFAULT_REFERRAL_CODE);
+  const byReferralCode = users.find(
+    (user) => normalizeReferralCode(user?.referralCode) === defaultReferralCode
+  );
+  if (byReferralCode) {
+    return byReferralCode;
+  }
+  return users.find((user) => SUPER_ADMIN_EMAIL_ALIASES.has(normalizeEmail(user?.email))) || null;
+}
+
+function resolveFallbackReferrerIdForUser(user, {
+  defaultSuperAdminReferrerId = "",
+  referrerIdByReferralCode = new Map()
+} = {}) {
+  const explicitReferrerId = normalizeString(user?.referredBy);
+  if (explicitReferrerId) {
+    return explicitReferrerId;
+  }
+
+  const referredByCode = normalizeReferralCode(user?.referredByCode);
+  if (referredByCode) {
+    const mappedReferrerId = normalizeString(referrerIdByReferralCode.get(referredByCode));
+    if (mappedReferrerId) {
+      return mappedReferrerId;
+    }
+    if (
+      defaultSuperAdminReferrerId &&
+      referredByCode === normalizeReferralCode(SUPER_ADMIN_DEFAULT_REFERRAL_CODE)
+    ) {
+      return defaultSuperAdminReferrerId;
+    }
+    return "";
+  }
+
+  const userId = normalizeString(user?.userId);
+  if (defaultSuperAdminReferrerId && userId && userId !== defaultSuperAdminReferrerId) {
+    return defaultSuperAdminReferrerId;
+  }
+  return "";
+}
+
+function buildReferralEventsWithFallback(users, referralEvents = []) {
+  const referrerIdByReferralCode = buildReferrerIdByReferralCode(users);
+  const defaultSuperAdminUser = resolveDefaultSuperAdminUser(users);
+  const defaultSuperAdminReferrerId = normalizeString(defaultSuperAdminUser?.userId);
+  const existingEventByUserId = new Set(
+    referralEvents
+      .map((event) => normalizeString(event?.userId))
+      .filter(Boolean)
+  );
+
+  const derivedEvents = [];
+  users.forEach((user) => {
+    const userId = normalizeString(user?.userId);
+    if (!userId || existingEventByUserId.has(userId)) {
+      return;
+    }
+
+    const resolvedReferrerId = resolveFallbackReferrerIdForUser(user, {
+      defaultSuperAdminReferrerId,
+      referrerIdByReferralCode
+    });
+    if (!resolvedReferrerId || resolvedReferrerId === userId) {
+      return;
+    }
+
+    const completedPhaseIds = Array.isArray(user?.completedPhases) ? user.completedPhases : [];
+    const isConverted = completedPhaseIds.includes("phase1");
+    const joinedAtMs = Number(user?.createdAtMs || user?.updatedAtMs || 0) || null;
+    const convertedAtMs = isConverted ? Number(user?.updatedAtMs || user?.createdAtMs || 0) || null : null;
+
+    derivedEvents.push({
+      eventId: `derived_${resolvedReferrerId}_${userId}`,
+      referrerId: resolvedReferrerId,
+      userId,
+      referredUserName: normalizeString(user?.name),
+      referredUserEmail: normalizeEmail(user?.email),
+      status: isConverted ? "converted" : "joined",
+      isConverted,
+      source: "derived-default-referral",
+      joinedAtMs,
+      convertedAtMs,
+      updatedAtMs: Number(user?.updatedAtMs || user?.createdAtMs || 0) || null
+    });
+  });
+
+  return {
+    referralEvents: referralEvents.concat(derivedEvents),
+    referrerIdByReferralCode,
+    defaultSuperAdminReferrerId
+  };
+}
+
 function toStartOfDay(ms) {
   const date = new Date(ms);
   date.setHours(0, 0, 0, 0);
@@ -447,9 +573,14 @@ export function buildOperationalAnalytics(snapshot, options = {}) {
   const bookings = snapshot.bookings || [];
   const progressDocs = snapshot.progressDocs || [];
   const lessonDocs = snapshot.lessonDocs || [];
-  const referralEvents = snapshot.referralEvents || [];
+  const referralEventsRaw = snapshot.referralEvents || [];
   const affiliateStats = snapshot.affiliateStats || [];
   const affiliateCommissions = snapshot.affiliateCommissions || [];
+  const {
+    referralEvents,
+    referrerIdByReferralCode,
+    defaultSuperAdminReferrerId
+  } = buildReferralEventsWithFallback(users, referralEventsRaw);
 
   const userById = new Map(users.map((user) => [user.userId, user]));
   const bookingByUser = groupByUser(bookings, (booking) => booking.userId);
@@ -628,9 +759,14 @@ export function buildOperationalAnalytics(snapshot, options = {}) {
       lastLearningActivityMs > 0 &&
       (nowMs - lastLearningActivityMs) >= (STALLED_PHASE_DAYS * MS_IN_DAY);
 
-    const referrerProfile = userById.get(user.referredBy);
-    const referralSource = user.referredBy
-      ? (referrerProfile?.name || user.referredBy)
+    const resolvedReferrerId = resolveFallbackReferrerIdForUser(user, {
+      defaultSuperAdminReferrerId,
+      referrerIdByReferralCode
+    });
+    const referrerProfile = userById.get(resolvedReferrerId);
+    const fallbackReferralCode = normalizeReferralCode(user.referredByCode);
+    const referralSource = resolvedReferrerId
+      ? (referrerProfile?.name || fallbackReferralCode || resolvedReferrerId)
       : "Direct";
     const whatsappNumber = resolveBestWhatsapp(user, userBookings);
     const dateAnchorRaw = latestBookingStatus === BOOKING_STATUS.expired
