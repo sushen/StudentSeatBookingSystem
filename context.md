@@ -1,183 +1,145 @@
 # context.md
 
 ## Project Summary
-This repository is a Firebase-hosted web system for **Shapla Chottor Lab** that combines:
-1. learner onboarding and Google-authenticated profiles,
-2. phase-based seat booking and moderation,
-3. structured lesson progression with gated phase advancement,
-4. referral/affiliate tracking, and
-5. two admin surfaces (in-app moderation + a separate analytics dashboard).
+This repository is a Firebase-backed web platform for Shapla Chottor Lab with three shipped surfaces:
+- learner web app (`index.html` + `app.js`),
+- admin operations dashboard (`admin/admin.html`),
+- referral-approval queue (`admin/referral-approval/index.html`).
 
-Core workflow implemented in code:
-1. user signs in with Google,
-2. user saves WhatsApp/phone,
-3. user requests phase access (booking),
-4. admin reviews/approves/rejects/cancels,
-5. approved learners complete lessons sequentially,
-6. learning completion unlocks next-phase booking eligibility.
-
-Important implementation truth: Phase 1 is **not auto-open**; classroom access is tied to `unlockedPhases` / approved booking state.
+It solves seat-gated phase access with moderation, structured lesson progression, and referral/affiliate attribution.  
+Critical state transitions (booking lifecycle, referral approvals, conversion/commission, reconciliations, deletion cascade) are backend-authoritative through Cloud Functions.
 
 ## Tech Stack
-- Frontend:
-  - Plain HTML/CSS/JavaScript (ES modules), no framework.
-  - Firebase Web SDK `10.12.5` loaded from CDN (Auth, Firestore, Functions).
-  - Lucide icons.
-  - Browser SpeechSynthesis API for admin voice alerts.
-  - Facebook Pixel in `index.html`.
-- Admin Operations Center (`/admin/admin.html`):
-  - Modular ES modules.
-  - Chart.js `4.4.3` + `chartjs-chart-funnel`.
-- Backend:
-  - Firebase Cloud Functions v2 (Node 20, ESM).
-  - Firestore + Firebase Auth (Admin SDK).
-  - Scheduled function every 5 minutes for stale booking expiry.
-- Hosting/config:
-  - Firebase Hosting serves repo root, rewrites `** -> /index.html`.
-  - Firestore rules in `firestore.rules`.
+- Frontend: Vanilla HTML/CSS/ES module JavaScript.
+- Firebase Web SDK `10.12.5` (Auth, Firestore, Functions) via CDN.
+- Backend: Firebase Cloud Functions v2 (`functions/index.js`), Node 20, ESM, `firebase-admin`, `firebase-functions`.
+- Database/Auth: Firestore + Firebase Authentication.
+- Admin analytics visuals: Chart.js `4.4.3` + `chartjs-chart-funnel`.
+- Icons: Lucide.
+- Other integrations: Web Speech API (admin voice alerts), Facebook Pixel.
+- Hosting: Firebase Hosting rewrite-all to `/index.html`, no-cache headers for HTML/JS.
 
 ## Architecture
-- Main app (`app.js`) is a monolithic SPA controller with:
-  - a centralized in-memory `state` object,
-  - DOM-driven rendering functions,
-  - Firebase realtime listeners (`onSnapshot`) for phases/profile/bookings/progress/affiliate stats,
-  - callable-function integration with client-transaction fallbacks.
-- Learning modules:
-  - `learning/lessonCatalog.js` (phase lessons and blocks),
-  - `learning/progression.js` (progress math and feature gates).
-- Booking lifecycle authority:
-  - Primary path: Cloud Functions (`createBooking`, `approveBooking`, etc.).
-  - Fallback path: client-side Firestore transactions in `app.js` for key mutations when callables fail/unavailable.
-- Separate admin analytics app:
-  - `admin/services/dataService.js` streams all operational collections.
-  - `admin/services/analyticsService.js` builds KPI/alert/student risk models.
-  - Rendering split across `admin/components/*` and `admin/charts/*`.
-- Security boundary:
-  - Firestore rules enforce auth/admin checks, but still permit several owner-side direct writes (see limitations).
+- Main learner app is a centralized stateful SPA controller in [app.js](/C:/Users/user/PycharmProjects/StudentSeatBookingSystemVersionFour/app.js).
+- Cloud Functions in [functions/index.js](/C:/Users/user/PycharmProjects/StudentSeatBookingSystemVersionFour/functions/index.js) enforce lifecycle mutations and run scheduled cleanup/reconciliation.
+- Firestore rules in [firestore.rules](/C:/Users/user/PycharmProjects/StudentSeatBookingSystemVersionFour/firestore.rules) block direct client writes for backend-owned domains (`bookings`, `referralEvents`, `affiliateStats`, `referralApprovals`, etc.).
+- Admin Operations Center is read-heavy analytics:
+  - `RealtimeDataService` subscribes to users/phases/bookings/progress/referral/affiliate collections.
+  - `buildOperationalAnalytics` derives KPIs, risk, funnels, alerts, charts.
+- Referral Approval Queue is callable-first, with a Firestore fallback mode that mutates `users` docs when callables are unavailable.
+
+State/listener boundaries:
+- Learner listeners: `phases`, `users/{uid}`, `users/{uid}/progress`, `bookings(where userId==uid)`, `affiliateStats/{uid}`, `referralEvents(where referrerId==uid)`, plus fallback referral streams (`referralPublic`, legacy `users` queries).
+- Admin analytics listeners: collection-level and collectionGroup-level subscriptions; progress has fallback from `collectionGroup(progress)` to per-user `users/{uid}/progress`.
+- Transactions: all booking moderation callables, referral review callables, conversion+commission writes, and deletion cascade planning.
 
 ## Features Implemented
-- Authentication and access:
-  - Google sign-in (popup with redirect fallback).
-  - In-app browser detection/guidance; blocks Google auth in known embedded browsers.
-- Profile and user data:
-  - Save/edit WhatsApp/phone in profile modal.
-  - Referral code input capture before login and deferred apply after login.
-- Phases and booking:
-  - 6 canonical phases with legacy ID normalization (`phase_1` -> `phase1`, etc.).
-  - Seat availability checks.
-  - Booking request with 15-minute pending expiry window.
-  - Booking status model: `pending`, `reviewing`, `approved`, `rejected`, `cancelled`, `expired`.
-  - Status countdown UI and lifecycle badges.
-- Learning:
-  - Classroom with sequential lesson unlocking.
-  - Lesson blocks: Concept / Example / Exercise / Reflection.
-  - Reflection required before marking lesson complete.
-  - Progress persisted under `users/{uid}/progress/{phaseId}`.
-  - `completedPhases` and aggregate `progress` updates on user doc.
-  - Feature gates from overall progress: tradingBot (30%), investment (60%), affiliate (100%).
+- Google login/logout (popup + redirect fallback), with in-app browser detection and "open in browser" guidance.
+- Profile/contact flow with WhatsApp capture, referral code display/share link copy, and account deletion confirmation flow.
+- Booking state machine:
+  - `pending -> reviewing -> approved/rejected`,
+  - `approved -> cancelled`,
+  - `pending/reviewing -> expired` (time-based).
+- Seat governance with `phases.totalSeats/bookedSeats`.
+- Learning/classroom flow:
+  - fixed per-phase lesson catalog,
+  - strict sequential lesson unlock,
+  - reflection required before lesson completion,
+  - progress persisted in `users/{uid}/progress/{phaseId}`.
+- Progress-based feature gates (`tradingBot`, `investment`, `affiliate`).
 - Referral/affiliate:
-  - Callable `applyReferralCode`.
-  - Callable `markReferralConversion` after phase1 completion.
-  - Profile invite/copy UX and affiliate stat display.
-- In-app admin moderation panel:
-  - Pending/reviewing queue and all/approved views.
-  - Actions: move to reviewing, approve, reject, cancel seat.
-  - Voice alerts for new pending bookings.
-- Separate Admin Operations Center:
-  - Realtime KPIs, learning charts, booking funnel, phase analytics, referral analytics, alert list.
-  - Student table with filters/sort and deep-dive drawer.
-  - Follow-up state stored in browser `localStorage` (not Firestore).
-- Account deletion:
-  - Callable `deleteAccountCascade` with confirmation token `DELETE`.
-  - Client-side deletion fallback if backend unavailable.
+  - click/session tracking (`trackAffiliateClick`),
+  - direct referral assignment callable exists (`applyReferralCode`) and can bind tracked session attribution,
+  - referral request workflow (`requestReferralApproval` + admin review),
+  - conversion marking on phase1 completion (`markReferralConversion`),
+  - user-triggered + periodic stats reconciliation (`syncMyAffiliateStats`, scheduled reconciliation),
+  - public/legacy fallback referral event rendering in learner UI.
+- Admin inline panel inside learner app supports booking moderation callables.
+- Separate admin operations dashboard with KPI cards, student risk table, phase analytics, booking funnel, referral analytics, and deep-dive drawer.
+- Separate referral queue UI with approve/reject/apply-code actions and fallback mode.
 
 ## Data Model
-- `users/{uid}`
-  - Key fields seen in code: `name`, `email`, `phone`, `phoneNumber`, `whatsapp`, `whatsappNumber`, `referralCode`, `referredBy`, `progress`, `unlockedPhases[]`, `completedPhases[]`, `createdAt`, `updatedAt`.
-- `users/{uid}/progress/{phaseId}`
-  - Fields: `phaseId`, `completedLessonIds`, `completedLessons` (alias), `reflections`, `completedCount`, `totalLessons`, `progressPercent`, `lastCompletedLessonId`, `updatedAt`.
-- `phases/{phaseId}`
-  - Fields: `phaseId`, `title`, `description`, `level`, `order`, `totalSeats`, `bookedSeats`, optional `updatedAt`.
-- `bookings/{bookingId}` where `bookingId = "${userId}_${phaseId}"`
-  - Canonical + compatibility fields written: `bookingId`, `id`, `userId`, `uid`, `phaseId`, `phase`, `phaseKey`, `phaseCanonicalId`, `phaseLegacyId`, `phaseIdAliases`, contact fields, status aliases, timestamps (`createdAt`, `updatedAt`, `expiresAt`, `...AtMs`), `source`.
-- `referralEvents/{referrerId}_{userId}`
-  - Fields: `eventId`, `referrerId`, `userId`, `referredUserName`, `referredUserEmail`, `status`, `isConverted`, `joinedAt`, optional `convertedAt`, `updatedAt`, `source`.
-- `affiliateStats/{referrerId}`
-  - Fields: `userId`, `totalInvites`, `conversions`, `updatedAt`.
+- `users/{uid}`: identity/contact, learning aggregates (`progress`, `completedPhases`, `unlockedPhases`), referral attribution (`referralCode`, `referredBy*`), pending referral fields (`pendingReferral*`), invite/conversion counters.
+- `users/{uid}/progress/{phaseId}`: `completedLessonIds`, `reflections`, `completedCount`, `totalLessons`, `progressPercent`, timestamps.
+- `phases/{phaseId}`: canonical phase metadata + seat counters.
+- `bookings/{uid_phaseId}`:
+  - canonical fields: `bookingId`, `userId`, `phaseId`, `status`, `createdAt`, `expiresAt`,
+  - compatibility aliases: `id`, `uid`, `phase`, `phaseKey`, `requestStatus`, `bookingStatus`, `phaseCanonicalId`, `phaseLegacyId`.
+- `referralEvents/{referrerId_userId}`: join/conversion status and timestamps.
+- `affiliateStats/{referrerId}`: invite/conversion aggregates.
+- `referralApprovals/{requestId}`: pending/approved/rejected referral requests with reviewer metadata.
+- `referralPublic/{referralCode}/events/{userId}`: client-published fallback event stream.
+- Affiliate attribution/ledger collections:
+  - `affiliateClicks/{clickId}`: click-level records with `sessionId`, `referrerId`, `referralCode`, campaign/source, hashed UA/IP, timestamps.
+  - `affiliateSessions/{sessionId}`: session-level attribution state (`open/bound`), click counters, TTL (`expiresAtMs`), optional bound `userId`.
+  - `affiliateCommissions/{referrer_user_phase}`: idempotent conversion ledger (`status`, `amountMicros`, `currency`, `rateBps`, `idempotencyKey`).
+  - `affiliatePayouts`, `affiliateCampaigns`: schema/rules present; no active payout or campaign workflow in this repo.
+  - `fraudSignals`, `auditLogs`: backend-only operational/security traces for affiliate/referral events.
 
-State machine implemented in backend/client logic:
-1. `pending` -> `reviewing`
-2. `pending|reviewing` -> `approved`
-3. `pending|reviewing` -> `rejected`
-4. `approved` -> `cancelled`
-5. `pending|reviewing` -> `expired` (time-based)
-
-Cross-platform compatibility handling in code:
-- Canonical phase IDs + legacy aliases are normalized in app/admin/functions.
-- Booking schema writes both canonical and legacy alias fields.
-- Status values are lowercase canonical strings.
+Cross-platform contract checks from code:
+- No mobile client code exists in this repository; contract parity concerns are between learner web, admin web, and Cloud Functions.
+- Canonical phase IDs are `phase1..phase6`; legacy `phase_1..phase_6` mapping exists in learner app, admin normalizers, and functions.
+- Canonical booking statuses are lowercase: `pending`, `reviewing`, `approved`, `rejected`, `cancelled`, `expired`.
+- Canonical booking identity is `bookingId = "${uid}_${phaseId}"`.
+- Compatibility risk still present:
+  - learner app queries bookings by `userId` only,
+  - backend reconciliation queries approved bookings by canonical `phaseId` only.
+  Legacy docs missing canonical fields can be partially invisible until migrated.
 
 ## Core Logic
-- `createBooking` (callable, transaction):
-  - requires auth,
-  - validates phone formats,
-  - canonicalizes phase IDs,
-  - enforces prior-phase completion from `users.completedPhases`,
-  - expires stale active booking if needed,
-  - blocks duplicate active/approved booking,
-  - checks seat capacity,
-  - writes a pending booking document.
-- Admin lifecycle callables (transactional):
-  - `markBookingReviewing`, `approveBooking`, `rejectBooking`, `cancelBooking`.
-  - `approve` increments phase `bookedSeats` and `arrayUnion`s user `unlockedPhases`.
-  - `cancel` decrements `bookedSeats` and `arrayRemove`s `unlockedPhases`.
-- Expiry and reconciliation:
-  - `expireStaleBookingsScheduled` runs every 5 minutes (plus manual callable).
-  - `reconcileBookingConsistency` recalculates `bookedSeats` from approved bookings and unions unlocked phases.
-- Referral logic:
-  - `applyReferralCode` validates against self-referral, creates referral event, increments invite stats.
-  - `markReferralConversion` allows conversion for phase1 completion only.
-- Deletion logic:
-  - `deleteAccountCascade` recursively deletes user-owned docs across collections and Auth user.
-- Client fallback behavior:
-  - If callables fail/unavailable, app falls back to direct Firestore transactions for create/approve/reject/cancel and to client-side account deletion.
-  - Some admin actions (move to reviewing) have no transaction fallback and require functions.
+- `createBooking` callable:
+  - auth required,
+  - validates prior-phase completion (from `users.completedPhases`),
+  - checks existing booking for same `uid_phaseId`,
+  - expires stale active booking in transaction if needed,
+  - checks phase seat capacity,
+  - writes booking payload with canonical+legacy alias fields.
+- Admin booking callables (`markBookingReviewing`, `approveBooking`, `rejectBooking`, `cancelBooking`) mutate booking status and, where applicable, seat count + `users.unlockedPhases`.
+- Scheduled operations:
+  - `expireStaleBookingsScheduled` every 5 minutes,
+  - `reconcileSeatsAndUnlocksScheduled` every 30 minutes,
+  - `reconcileReferralStatsScheduled` every 30 minutes.
+- Affiliate/referral update logic:
+  - `trackAffiliateClick` resolves referral code to referrer, appends `affiliateClicks`, and upserts `affiliateSessions` with 30-day TTL.
+  - `syncMyAffiliateStats` scans current assignments + legacy patterns, repairs/normalizes `referralEvents`, and rewrites `affiliateStats` + mirrored counters on `users/{uid}`.
+  - approval and direct-apply paths both call session binding (`bindAffiliateSessionToUser`) when `sessionId` is present.
+- Referral approval domain:
+  - request stored in `referralApprovals/{uid}`,
+  - approval sets `referredBy*`, creates join event if missing, increments invites,
+  - rejection clears pending request fields and stamps review metadata.
+- Conversion domain:
+  - `markReferralConversion` requires phase1 completion,
+  - marks referral event converted and creates idempotent `affiliateCommissions/{referrer_user_phase1}` if missing.
+- `deleteAccountCascade` callable collects and deletes user-linked docs across multiple collections, recursively deletes user subtree, then deletes Firebase Auth user.
 
 ## Limitations
-- Firestore rules do **not** fully enforce backend-only authority for critical lifecycle domains:
-  - booking owners can create/update/delete their own booking docs directly,
-  - normal users can write referral/affiliate docs affecting analytics integrity.
-- Booking deletion by owner can desynchronize lifecycle/accounting:
-  - approved booking can be deleted directly,
-  - phase seat counters and `unlockedPhases` can drift,
-  - reconciliation currently unions unlocks but does not remove stale unlocks.
-- Client fallback paths can bypass backend consistency/audit guarantees when functions are down.
-- Canonical phase metadata is inconsistent across layers:
-  - `app.js` and `admin/utils/constants.js` define phase3-5 names differently from `functions/index.js` fallback catalog.
-- Legacy data compatibility gaps remain:
-  - user booking listener queries `where("userId","==",uid)`; legacy docs with only `uid` are not visible to learner UI.
-  - reconciliation queries approved bookings by `phaseId`; legacy records missing canonical `phaseId` are skipped.
-- No automated tests or CI checks in repo for lifecycle/state integrity.
-- No Firestore index configuration file in repo (operational drift risk across environments).
-- Referral code uniqueness is not enforced globally (collision risk from 6-char UID-derived codes).
-- UI placeholders exist without implementation (`Forgot Password`, register flow text, notifications settings row).
+- Owner write scope on `users/{uid}` is broad. Sensitive fields that drive backend decisions (`completedPhases`, `referredBy*`, referral pending metadata, counters) are not field-restricted in rules.
+- Backend prerequisite checks trust mutable user fields (`users.completedPhases`), so progression gating can be bypassed by direct profile edits.
+- Owner write access to `users/{uid}/progress/{phaseId}` enables direct client mutation of completion markers that some backend decisions currently trust.
+- Referral conversion logic trusts profile attribution (`referredBy`) + writable progress signals, enabling abuse if profile/progress fields are tampered.
+- `applyReferralCode` is callable by any authenticated user and can assign referral immediately, which bypasses admin-review-first policy implied by the approval queue UX.
+- Phase catalog definitions diverge across layers (`app.js`, `admin/utils/constants.js`, `functions/index.js` titles/descriptions are not identical).
+- Referral fallback path in queue UI performs heuristic identity recovery and capped scans (`limit(250/350/1000)`), which is fragile and not scalable.
+- Some reported affiliate/referral counters in learner UI derive from fallback event composition and can diverge from authoritative aggregates.
+- Collections such as `affiliatePayouts` and `affiliateCampaigns` are defined/rules-protected but have no active write workflow in current code.
+- Test coverage is minimal: one Firestore rules test file; no dedicated automated tests for callable lifecycle logic.
+- UI placeholders exist without implemented behavior (`Forgot Password`, Register prompt text, Notifications row in profile settings).
 
 ## Missing / TODO
-- Harden Firestore rules so booking/referral/affiliate critical writes are function-only.
-- Remove/limit client mutation fallbacks for moderation-critical transitions.
-- Add data migration tooling for legacy docs (`uid` vs `userId`, missing canonical `phaseId`, stale status aliases).
-- Add unlock reconciliation that can both add and remove `unlockedPhases` based on authoritative booking state.
-- Align and centralize phase catalog constants across app/admin/functions.
-- Add scheduled/observable operational jobs for integrity checks (plus dashboards/alerts for failures).
-- Implement actual auth recovery/onboarding flows (forgot password / registration) or remove dead UI.
-- Add automated test coverage for status transitions, expiry, seat accounting, and deletion cascade.
+- Enforce field-level write constraints for user-owned docs, or move authoritative progression/referral fields to backend-only documents.
+- Rework booking prerequisite validation to use authoritative progress evidence, not mutable profile aggregates alone.
+- Decide a single referral assignment policy: either restrict/remove direct `applyReferralCode` or enforce explicit admin-controlled gates before assignment.
+- Add migration for legacy booking/user docs to guaranteed canonical fields (`userId`, `phaseId`).
+- Unify canonical phase metadata and contract constants into one shared source used by learner/admin/functions.
+- Strengthen referral analytics contract (clear join vs conversion semantics across primary/legacy/public fallback data).
+- Add pagination/index-aware admin fallback query paths and reduce full-scan heuristics.
+- Add function-level automated tests for booking lifecycle, referral approval/rejection, conversion idempotency, reconciliation, and deletion cascade.
+- Add operational controls for growth (retention/archival for `auditLogs`, `fraudSignals`, click/session data).
 
 ## Recommended Next Steps
-1. **Security first:** lock Firestore rules to backend-authoritative mutations for bookings/referrals/affiliate stats.
-2. **Consistency second:** disable risky client fallbacks and route all lifecycle writes through callables.
-3. **Data integrity:** run a one-time migration + improved reconciliation to canonicalize booking/user phase fields and repair unlock/seat drift.
-4. **Contract unification:** create one shared canonical phase/status/schema contract source used by app, admin, and functions.
-5. **Operational reliability:** add `firestore.indexes.json`, deployment checks, and callable-level audit/error telemetry.
-6. **Testability:** add integration tests for booking lifecycle transactions and account deletion cascade.
-7. **UX cleanup:** implement or remove non-functional profile/auth controls to reduce false affordances.
-
+1. Security hardening: lock down mutable `users/{uid}` fields that currently affect backend authority decisions.
+2. Progression integrity: validate phase prerequisites from backend-owned progress truth.
+3. Contract cleanup: migrate legacy docs and enforce canonical booking/user fields.
+4. Referral correctness: consolidate event semantics and make UI counters consume authoritative aggregates first.
+5. Test + release discipline: add callable/rules test suites and CI gates before deploy.
+6. Scale readiness: replace fallback scan-heavy admin flows with paginated/query-safe designs.

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Referral Approval Queue</title>
+  <link rel="icon" type="image/svg+xml" href="../../lotus_logo.svg" />
+  <link rel="shortcut icon" href="../../lotus_logo.svg" />
+  <link rel="stylesheet" href="./referral-approval.css" />
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+  <div class="queue-shell">
+    <aside class="queue-sidebar">
+      <div class="brand-block">
+        <img src="../../Image/ShaplaChottor.png" alt="Shapla Chottor Lab" class="brand-logo" />
+        <div>
+          <p class="brand-kicker">Admin Tool</p>
+          <h1>Referral Approval Queue</h1>
+        </div>
+      </div>
+
+      <p id="identityText" class="identity-text">Not signed in</p>
+      <p id="authStateText" class="auth-state">Sign in with your super admin account</p>
+
+      <div class="auth-actions">
+        <button id="loginBtn" type="button" class="primary-btn">
+          <i data-lucide="log-in"></i>
+          <span>Sign In</span>
+        </button>
+        <button id="logoutBtn" type="button" class="secondary-btn hidden">
+          <i data-lucide="log-out"></i>
+          <span>Sign Out</span>
+        </button>
+      </div>
+
+      <div class="status-box">
+        <span id="statusDot" class="status-dot warn"></span>
+        <p id="statusText">Initializing...</p>
+      </div>
+
+      <a href="../admin.html" class="nav-link">
+        <i data-lucide="layout-dashboard"></i>
+        <span>Back To Admin Center</span>
+      </a>
+    </aside>
+
+    <main class="queue-main">
+      <section id="authGate" class="gate-card">
+        <h2>Admin Login Required</h2>
+        <p>Sign in to review and approve pending referral requests.</p>
+      </section>
+
+      <section id="accessDenied" class="gate-card hidden">
+        <h2>Access Denied</h2>
+        <p>This account does not have permission to manage referral approvals.</p>
+      </section>
+
+      <section id="workspace" class="workspace hidden">
+        <header class="workspace-header">
+          <div>
+            <h2>Referral Requests</h2>
+            <p id="summaryText" class="summary-text">0 requests</p>
+          </div>
+          <div class="workspace-header-actions">
+            <button id="toggleSidebarBtn" type="button" class="icon-btn" title="Hide left sidebar" aria-label="Hide left sidebar">
+              <i data-lucide="panel-left-close"></i>
+            </button>
+            <button id="refreshBtn" type="button" class="icon-btn" title="Refresh queue" aria-label="Refresh queue">
+              <i data-lucide="refresh-cw"></i>
+            </button>
+          </div>
+        </header>
+
+        <div class="toolbar-row">
+          <label class="field">
+            <span>Status</span>
+            <select id="statusFilter">
+              <option value="all">All</option>
+              <option value="pending">Pending</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+            </select>
+          </label>
+          <label class="field search-field">
+            <span>Search</span>
+            <input id="searchInput" type="search" placeholder="Name, email, user ID, code, referrer, request ID" />
+          </label>
+        </div>
+
+        <div class="table-wrap">
+          <table class="queue-table">
+            <thead>
+              <tr>
+                <th>Request</th>
+                <th>User</th>
+                <th>Referral</th>
+                <th>Referrer</th>
+                <th>Status</th>
+                <th>Meta</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="requestRows"></tbody>
+          </table>
+        </div>
+        <p id="emptyText" class="empty-text">No requests found.</p>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="./js/main.js?v=20260524-rejectfallback"></script>
+</body>
+</html>

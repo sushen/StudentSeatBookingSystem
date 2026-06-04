@@ -273,7 +273,7 @@ function renderKpis() {
       label: "Estimated Revenue",
       value: model.kpis.estimatedRevenue,
       type: "currency",
-      caption: "From approved bookings pricing fields"
+      caption: "From affiliate commission ledger"
     },
     {
       key: "activeCohorts",

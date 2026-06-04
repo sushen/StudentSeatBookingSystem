@@ -9,13 +9,50 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    function hasOwnUserDocument() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function ownReferralCode() {
+      return hasOwnUserDocument() && ("referralCode" in get(/databases/$(database)/documents/users/$(request.auth.uid)).data)
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.referralCode
+        : "";
+    }
+
+    function fallbackSuperAdminEmails() {
+      return [
+        "sushen.biswas.aga@gmail.com",
+        "sushen.biswas.aga@googlemail.com"
+      ];
+    }
+
+    function hasSuperAdminConfig() {
+      return exists(/databases/$(database)/documents/appConfig/system);
+    }
+
+    function superAdminConfigData() {
+      return get(/databases/$(database)/documents/appConfig/system).data;
+    }
+
+    function isConfiguredSuperAdminEmail(email) {
+      return hasSuperAdminConfig() && (
+        (
+          ("superAdminEmail" in superAdminConfigData()) &&
+          (superAdminConfigData().superAdminEmail == email)
+        ) ||
+        (
+          ("superAdminEmails" in superAdminConfigData()) &&
+          (superAdminConfigData().superAdminEmails is list) &&
+          superAdminConfigData().superAdminEmails.hasAny([email])
+        )
+      );
+    }
+
     function isAdmin() {
       return isSignedIn() && (
         request.auth.token.admin == true ||
-        request.auth.token.email in [
-          "sushen.biswas.aga@gmail.com",
-          "sushen.biswas.aga@googlemail.com"
-        ]
+        isConfiguredSuperAdminEmail(request.auth.token.email) ||
+        request.auth.token.email in fallbackSuperAdminEmails()
       );
     }
 
@@ -23,6 +60,21 @@ service cloud.firestore {
       return isSignedIn() && (
         (("userId" in data) && data.userId == request.auth.uid) ||
         (("uid" in data) && data.uid == request.auth.uid)
+      );
+    }
+
+    function isReferralEventActor(data) {
+      return isSignedIn() && (
+        (("userId" in data) && data.userId == request.auth.uid) ||
+        (("referredUserId" in data) && data.referredUserId == request.auth.uid) ||
+        (("referrerId" in data) && data.referrerId == request.auth.uid)
+      );
+    }
+
+    function isAffiliateStatsOwner(affiliateId, data) {
+      return isSignedIn() && (
+        affiliateId == request.auth.uid ||
+        (("userId" in data) && data.userId == request.auth.uid)
       );
     }
 
@@ -86,26 +138,46 @@ service cloud.firestore {
     match /bookings/{bookingId} {
       allow read: if isSignedIn() && (
         resource == null ||
-        isBookingOwnerData(resource.data) ||
-        isAdmin()
+        isAdmin() ||
+        isBookingOwnerData(resource.data)
       );
+
+      // Allow web/Android students to create their own pending booking request.
       allow create: if isAdmin() || (
+        isSignedIn() &&
         isBookingOwnerData(request.resource.data) &&
+        ("phaseId" in request.resource.data) &&
+        request.resource.data.phaseId is string &&
+        request.resource.data.phaseId.size() > 0 &&
         hasConsistentPendingStatusAliases(request.resource.data) &&
         hasMatchingBookingDocumentIds(request.resource.data, bookingId)
       );
+
+      // Admin controls lifecycle changes. Students can only reset their own
+      // non-approved request back to a pending request for the same phase.
       allow update: if isAdmin() || (
+        isSignedIn() &&
         isBookingOwnerData(resource.data) &&
         isBookingOwnerData(request.resource.data) &&
         (hasReviewableBookingStatus(resource.data) || hasTerminalBookingStatus(resource.data)) &&
         hasConsistentPendingStatusAliases(request.resource.data) &&
-        hasMatchingBookingDocumentIds(request.resource.data, bookingId)
+        hasMatchingBookingDocumentIds(request.resource.data, bookingId) &&
+        (!("phaseId" in resource.data) || request.resource.data.phaseId == resource.data.phaseId)
       );
+
       allow delete: if isAdmin() || isBookingOwnerData(resource.data);
     }
 
     match /users/{userId} {
-      allow read: if isOwner(userId) || isAdmin();
+      allow read: if isOwner(userId) || isAdmin() || (
+        isSignedIn() && (
+          (("referredByCode" in resource.data) && resource.data.referredByCode == ownReferralCode()) ||
+          (("referredBy" in resource.data) && (
+            resource.data.referredBy == ownReferralCode() ||
+            resource.data.referredBy == request.auth.uid
+          ))
+        )
+      );
       allow create, update: if isOwner(userId) || isAdmin();
       allow delete: if isOwner(userId) || isAdmin();
 
@@ -119,35 +191,76 @@ service cloud.firestore {
     }
 
     match /referralEvents/{eventId} {
-      allow read: if isAdmin() || (isSignedIn() && (
-        resource.data.userId == request.auth.uid ||
-        resource.data.referredUserId == request.auth.uid ||
-        resource.data.referrerId == request.auth.uid
-      ));
-      allow create, update: if isAdmin() || (isSignedIn() && (
-        request.resource.data.userId == request.auth.uid ||
-        request.resource.data.referrerId == request.auth.uid
-      ));
-      allow delete: if isAdmin() || (isSignedIn() && (
-        resource.data.userId == request.auth.uid ||
-        resource.data.referredUserId == request.auth.uid ||
-        resource.data.referrerId == request.auth.uid
-      ));
+      allow read: if isAdmin() || isReferralEventActor(resource.data);
+      // Backend-authoritative referral attribution domain.
+      allow create, update: if false;
+      allow delete: if isAdmin() || isReferralEventActor(resource.data);
     }
 
     match /affiliateStats/{affiliateId} {
-      allow read: if isAdmin() || (isSignedIn() && (
-        affiliateId == request.auth.uid ||
-        resource.data.userId == request.auth.uid
-      ));
-      allow create, update: if isAdmin() || (isSignedIn() && (
-        affiliateId == request.auth.uid ||
-        request.resource.data.userId == request.auth.uid
-      ));
-      allow delete: if isAdmin() || (isSignedIn() && (
-        affiliateId == request.auth.uid ||
-        resource.data.userId == request.auth.uid
-      ));
+      allow read: if isAdmin() || isAffiliateStatsOwner(affiliateId, resource.data);
+      // Backend-authoritative affiliate aggregates.
+      allow create, update: if false;
+      allow delete: if isAdmin() || isAffiliateStatsOwner(affiliateId, resource.data);
+    }
+
+    match /referralPublic/{referralCode}/events/{userId} {
+      allow read: if isAdmin() || (isSignedIn() && ownReferralCode() == referralCode);
+      allow create, update: if isOwner(userId) &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.referralCode == referralCode;
+      allow delete: if isOwner(userId) || isAdmin() || (isSignedIn() && ownReferralCode() == referralCode);
+    }
+
+    match /referralApprovals/{requestId} {
+      allow read: if isAdmin() || (
+        isSignedIn() && (
+          requestId == request.auth.uid ||
+          (resource != null && ("requesterId" in resource.data) && resource.data.requesterId == request.auth.uid)
+        )
+      );
+      allow create, update: if false;
+      allow delete: if isAdmin() || (
+        isSignedIn() && (
+          requestId == request.auth.uid ||
+          (resource != null && ("requesterId" in resource.data) && resource.data.requesterId == request.auth.uid)
+        )
+      );
+    }
+
+    match /affiliateClicks/{clickId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    match /affiliateSessions/{sessionId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    match /affiliateCommissions/{commissionId} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.referrerId == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
+    match /affiliatePayouts/{payoutId} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.referrerId == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
+    match /affiliateCampaigns/{campaignId} {
+      allow read: if isAdmin() || (isSignedIn() && resource.data.ownerReferrerId == request.auth.uid);
+      allow create, update, delete: if false;
+    }
+
+    match /fraudSignals/{signalId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
+    }
+
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create, update, delete: if false;
     }
 
     match /{document=**} {

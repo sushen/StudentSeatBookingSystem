@@ -133,6 +133,7 @@ export function normalizeUserDoc(userId, data = {}) {
     whatsappNumber: normalizedWhatsappNumber,
     referralCode: normalizeString(data.referralCode).toUpperCase(),
     referredBy: normalizeString(data.referredBy),
+    referredByCode: normalizeString(data.referredByCode).toUpperCase(),
     progress: Number.isFinite(progressRaw) ? clamp(progressRaw, 0, 100) : null,
     unlockedPhases: normalizeStringArray(data.unlockedPhases).map(canonicalizePhaseId).filter(Boolean),
     completedPhases: normalizeStringArray(data.completedPhases).map(canonicalizePhaseId).filter(Boolean),
@@ -286,6 +287,29 @@ export function normalizeAffiliateStats(docId, data = {}) {
     referrerId: normalizeString(data.userId) || docId,
     totalInvites: Number.isFinite(invitesRaw) ? Math.max(0, Math.floor(invitesRaw)) : 0,
     conversions: Number.isFinite(conversionsRaw) ? Math.max(0, Math.floor(conversionsRaw)) : 0,
+    updatedAtMs: timestampToMillis(data.updatedAt) ?? timestampToMillis(data.updatedAtMs)
+  };
+}
+
+export function normalizeAffiliateCommission(docId, data = {}) {
+  const amountMicrosRaw = Number(data.amountMicros ?? 0);
+  const amountRaw = Number(data.amount ?? data.value ?? 0);
+  const amountMicros = Number.isFinite(amountMicrosRaw) ? Math.max(0, Math.floor(amountMicrosRaw)) : 0;
+  const amount = Number.isFinite(amountRaw) && amountRaw > 0
+    ? amountRaw
+    : (amountMicros / 1000000);
+
+  return {
+    commissionId: normalizeString(data.commissionId) || docId,
+    referrerId: normalizeString(data.referrerId),
+    referredUserId: normalizeString(data.referredUserId),
+    phaseId: canonicalizePhaseId(data.phaseId),
+    status: normalizeString(data.status).toLowerCase() || "pending",
+    currency: normalizeString(data.currency).toUpperCase() || "USD",
+    amountMicros,
+    amount,
+    rateBps: Number.isFinite(Number(data.rateBps)) ? Math.max(0, Math.floor(Number(data.rateBps))) : 0,
+    createdAtMs: timestampToMillis(data.createdAt) ?? timestampToMillis(data.createdAtMs),
     updatedAtMs: timestampToMillis(data.updatedAt) ?? timestampToMillis(data.updatedAtMs)
   };
 }

@@ -1,4 +1,5 @@
 import {
+  normalizeAffiliateCommission,
   extractUserIdFromProgressPath,
   normalizeLessonProgressDoc,
   mergeWithCanonicalPhases,
@@ -29,7 +30,8 @@ export class RealtimeDataService {
       progress: new Map(),
       lessonDocs: new Map(),
       referralEvents: new Map(),
-      affiliateStats: new Map()
+      affiliateStats: new Map(),
+      affiliateCommissions: new Map()
     };
 
     this.loaded = {
@@ -39,7 +41,8 @@ export class RealtimeDataService {
       progress: false,
       lessonDocs: false,
       referralEvents: false,
-      affiliateStats: false
+      affiliateStats: false,
+      affiliateCommissions: false
     };
   }
 
@@ -137,6 +140,15 @@ export class RealtimeDataService {
         );
       }, (error) => this.publishError("affiliateStats", error))
     );
+
+    this.subscribe(
+      "affiliateCommissions",
+      onSnapshot(collection(db, "affiliateCommissions"), (snapshot) => {
+        this.applyDocChanges("affiliateCommissions", this.cache.affiliateCommissions, snapshot, (docSnap) =>
+          normalizeAffiliateCommission(docSnap.id, docSnap.data())
+        );
+      }, (error) => this.publishError("affiliateCommissions", error))
+    );
   }
 
   stop() {
@@ -157,6 +169,7 @@ export class RealtimeDataService {
     this.cache.lessonDocs.clear();
     this.cache.referralEvents.clear();
     this.cache.affiliateStats.clear();
+    this.cache.affiliateCommissions.clear();
 
     this.loaded = {
       users: false,
@@ -165,7 +178,8 @@ export class RealtimeDataService {
       progress: false,
       lessonDocs: false,
       referralEvents: false,
-      affiliateStats: false
+      affiliateStats: false,
+      affiliateCommissions: false
     };
 
     this.progressFallbackEnabled = false;
@@ -344,7 +358,8 @@ export class RealtimeDataService {
       progressDocs: Array.from(this.cache.progress.values()),
       lessonDocs: Array.from(this.cache.lessonDocs.values()),
       referralEvents: Array.from(this.cache.referralEvents.values()),
-      affiliateStats: Array.from(this.cache.affiliateStats.values())
+      affiliateStats: Array.from(this.cache.affiliateStats.values()),
+      affiliateCommissions: Array.from(this.cache.affiliateCommissions.values())
     };
   }
 }

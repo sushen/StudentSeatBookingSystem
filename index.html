@@ -28,7 +28,7 @@
     }(window, document, "script", "https://connect.facebook.net/en_US/fbevents.js");
     fbq("init", "921090944235693");
     fbq("track", "PageView");
-  </script>
+    <img src="screenshot/Screenshot_10.jpg" height="767" width="1365"/></script>
   <!-- End Meta Pixel Code -->
 </head>
 <body>
@@ -116,6 +116,10 @@
           <button type="button" class="workspace-nav-btn" data-nav-section="features">
             <span class="nav-icon" aria-hidden="true"><i data-lucide="sparkles"></i></span>
             <span>Advanced</span>
+          </button>
+          <button type="button" class="workspace-nav-btn" data-nav-section="affiliate">
+            <span class="nav-icon" aria-hidden="true"><i data-lucide="users-round"></i></span>
+            <span>Affiliate</span>
           </button>
           <button type="button" class="workspace-nav-btn" data-nav-section="profile">
             <span class="nav-icon" aria-hidden="true"><i data-lucide="user-round"></i></span>
@@ -328,6 +332,18 @@
               <div class="profile-meta-list">
                 <p>Phone: <span id="profilePhoneNumber">-</span></p>
                 <p>WhatsApp: <span id="profileWhatsapp">-</span></p>
+                <p class="profile-meta-referred-row">
+                  <span>Referred By: <span id="profileReferredBy">-</span></span>
+                  <button
+                    id="profileReferredByEditBtn"
+                    type="button"
+                    class="profile-meta-edit-btn icon-btn hidden"
+                    aria-label="Set referral code"
+                    title="Set referral code"
+                  >
+                    <i data-lucide="square-pen"></i>
+                  </button>
+                </p>
               </div>
               <div class="profile-referral-wrap">
                 <p>Your Referral Code</p>
@@ -337,12 +353,17 @@
               <div class="profile-stats-row">
                 <div>
                   <p id="profileInviteCount">0</p>
-                  <span>Invites</span>
+                  <span>Invites Sent</span>
                 </div>
                 <div>
                   <p id="profileConversionCount">0</p>
                   <span>Conversions</span>
                 </div>
+              </div>
+              <div class="profile-referral-activity">
+                <p class="profile-referral-activity-title">Referral Activity</p>
+                <p id="profileReferralEmpty" class="profile-referral-empty">No one has joined with your referral yet.</p>
+                <ul id="profileReferralList" class="profile-referral-list hidden"></ul>
               </div>
             </section>
 
@@ -365,8 +386,121 @@
             </footer>
           </section>
 
+          <section id="affiliatePanel" class="screen-section hidden">
+            <header class="screen-header">
+              <div>
+                <h2>Affiliate Dashboard</h2>
+                <p>Track your referral link, referred learners, conversions, and reward status.</p>
+              </div>
+              <button id="affiliateSyncBtn" type="button" class="secondary affiliate-sync-btn">
+                Sync Stats
+              </button>
+            </header>
+
+            <section class="affiliate-hero-card">
+              <div>
+                <p class="affiliate-kicker">Your Referral Code</p>
+                <h3 id="affiliateReferralCode">------</h3>
+                <p class="affiliate-muted">Share this code with new learners.</p>
+              </div>
+
+              <div class="affiliate-link-box">
+                <label for="affiliateReferralLink">Referral Link</label>
+                <div class="affiliate-link-row">
+                  <input id="affiliateReferralLink" type="text" readonly value="" />
+                  <button id="affiliateCopyLinkBtn" type="button">Copy</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="affiliate-summary-grid" aria-label="Affiliate summary">
+              <article class="affiliate-summary-card">
+                <span class="affiliate-card-icon" aria-hidden="true"><i data-lucide="user-plus"></i></span>
+                <p id="affiliateTotalInvites">0</p>
+                <span>Total Invites</span>
+              </article>
+
+              <article class="affiliate-summary-card">
+                <span class="affiliate-card-icon" aria-hidden="true"><i data-lucide="clock-3"></i></span>
+                <p id="affiliatePendingReferrals">0</p>
+                <span>Pending</span>
+              </article>
+
+              <article class="affiliate-summary-card">
+                <span class="affiliate-card-icon" aria-hidden="true"><i data-lucide="badge-check"></i></span>
+                <p id="affiliateApprovedReferrals">0</p>
+                <span>Approved</span>
+              </article>
+
+              <article class="affiliate-summary-card">
+                <span class="affiliate-card-icon" aria-hidden="true"><i data-lucide="x-circle"></i></span>
+                <p id="affiliateRejectedReferrals">0</p>
+                <span>Rejected</span>
+              </article>
+
+              <article class="affiliate-summary-card">
+                <span class="affiliate-card-icon" aria-hidden="true"><i data-lucide="target"></i></span>
+                <p id="affiliateConversions">0</p>
+                <span>Conversions</span>
+              </article>
+
+              <article class="affiliate-summary-card">
+                <span class="affiliate-card-icon" aria-hidden="true"><i data-lucide="wallet"></i></span>
+                <p id="affiliatePendingCommission">0</p>
+                <span>Pending Commission</span>
+              </article>
+
+              <article class="affiliate-summary-card">
+                <span class="affiliate-card-icon" aria-hidden="true"><i data-lucide="circle-dollar-sign"></i></span>
+                <p id="affiliateApprovedCommission">0</p>
+                <span>Approved Commission</span>
+              </article>
+
+              <article class="affiliate-summary-card">
+                <span class="affiliate-card-icon" aria-hidden="true"><i data-lucide="banknote"></i></span>
+                <p id="affiliatePaidCommission">0</p>
+                <span>Paid Commission</span>
+              </article>
+            </section>
+
+            <section class="affiliate-table-card">
+              <div class="affiliate-table-head">
+                <div>
+                  <h3>Referred Learners</h3>
+                  <p>See who joined using your referral and whether they converted.</p>
+                </div>
+              </div>
+
+              <div class="affiliate-table-wrap">
+                <table class="affiliate-table">
+                  <thead>
+                    <tr>
+                      <th>Learner</th>
+                      <th>Email</th>
+                      <th>Joined</th>
+                      <th>Referral Status</th>
+                      <th>Progress</th>
+                      <th>Conversion</th>
+                      <th>Commission</th>
+                    </tr>
+                  </thead>
+                  <tbody id="affiliateReferralRows"></tbody>
+                </table>
+              </div>
+
+              <p id="affiliateEmptyState" class="affiliate-empty-state">
+                No referred learners found yet. Share your referral link to invite new learners.
+              </p>
+            </section>
+          </section>
+
           <section id="adminPanel" class="admin-panel hidden">
-            <h2>Admin Panel</h2>
+            <div class="admin-heading-row">
+              <h2>Admin Panel</h2>
+              <button id="openReferralApprovalPanelBtn" type="button" class="admin-queue-link-btn">
+                Referral Approvals
+              </button>
+            </div>
             <div class="admin-tabs" role="tablist" aria-label="Admin booking tabs">
               <button type="button" class="admin-tab active" data-admin-tab="pending">Pending</button>
               <button type="button" class="admin-tab" data-admin-tab="approved">Approved</button>
@@ -434,6 +568,18 @@
         <button id="openBrowserBtn" type="button">Open in Browser (Android)</button>
         <button id="copyLinkBtn" type="button" class="secondary">Copy Link</button>
         <button id="inAppCloseBtn" type="button" class="secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="referralConfirmModal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="referralConfirmTitle">
+    <div class="modal-card">
+      <h2 id="referralConfirmTitle">Confirm Referral Code</h2>
+      <p>Apply this referral code to your account?</p>
+      <p id="referralConfirmCode" class="referral-confirm-code">------</p>
+      <div class="modal-actions">
+        <button id="referralConfirmApplyBtn" type="button">Apply Code</button>
+        <button id="referralConfirmSkipBtn" type="button" class="secondary">Skip</button>
       </div>
     </div>
   </div>

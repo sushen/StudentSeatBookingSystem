@@ -20,6 +20,13 @@ The UI always supports this 6-phase flow (Firestore `phases` can override detail
 - `bookings`
 - `referralEvents`
 - `affiliateStats`
+- `affiliateClicks`
+- `affiliateSessions`
+- `affiliateCommissions`
+- `affiliatePayouts`
+- `affiliateCampaigns`
+- `fraudSignals`
+- `auditLogs`
 - `users/{uid}/progress/{phaseId}` (lesson progression + reflections)
 
 ## Android Compatibility Contract
@@ -152,7 +159,11 @@ Actions:
 - `expireStaleBookingsScheduled` (every 5 minutes)
 - `expireStaleBookingsNow`
 - `reconcileBookingConsistency`
+- `reconcileSeatsAndUnlocksScheduled` (every 30 minutes)
+- `reconcileReferralStatsNow`
+- `reconcileReferralStatsScheduled` (every 30 minutes)
 - `deleteAccountCascade`
+- `trackAffiliateClick`
 
 ## Deployment
 
